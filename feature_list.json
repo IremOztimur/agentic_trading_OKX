@@ -1,18 +1,65 @@
 {
   "schema_version": 1,
   "features": [
-    {"id": "state-contract", "description": "Tek state ve event logu atomic olarak yönetilir", "passes": true},
-    {"id": "regime-engine", "description": "RANGE/TREND/SHOCK sınıflandırması, hysteresis ve spot-only aksiyonlar çalışır", "passes": true},
-    {"id": "risk-gate", "description": "Deterministik risk-gate ve MCP hook fail-closed çalışır", "passes": true},
-    {"id": "watchdog", "description": "Watchdog yalnızca risk azaltıcı aksiyon üretir", "passes": true},
-    {"id": "dashboard", "description": "Statik dashboard güncel redakte edilmiş state'i gösterir", "passes": true},
-    {"id": "mcp-read", "description": "Claude custom MCP üzerinden gerçek OKX account read doğrulanır", "passes": true},
-    {"id": "minimal-runner", "description": "Tek-process scheduler, heartbeat ve deterministic regime akışı çalışır", "passes": true},
-    {"id": "rate-limit-policy", "description": "Endpoint pacing, read 429 backoff ve no-blind-write-retry testlidir", "passes": true},
-    {"id": "event-driven-agent", "description": "Claude yalnızca actionable candidate için APPROVE/VETO verir", "passes": true},
-    {"id": "public-runner-preflight", "description": "Minimal runner OKX public market preflight tamamlar", "passes": true},
-    {"id": "private-mcp-preflight", "description": "Runner isteğiyle Claude custom MCP account/open-order read tamamlar", "passes": true},
-    {"id": "dry-run-soak", "description": "Runner en az 30 dakika hatasız DRY_RUN çalışır", "passes": false},
-    {"id": "mcp-live-smoke", "description": "CANLI_TEST onaylı minimum write smoke testi tamamlanır", "passes": false}
+    {
+      "id": "state-contract",
+      "description": "Tek state ve event logu atomic olarak yönetilir",
+      "passes": true
+    },
+    {
+      "id": "atk-mcp-client",
+      "description": "Runner OKX ATK MCP'ye stdio JSON-RPC ile doğrudan bağlanır",
+      "passes": true
+    },
+    {
+      "id": "perception-layer",
+      "description": "Beş sensör ATK MCP'den skor + freshness üretir",
+      "passes": true
+    },
+    {
+      "id": "decision-layer",
+      "description": "TREND/RANGE/SHOCK skorlaması, hysteresis ve conviction playbook'u çalışır",
+      "passes": true
+    },
+    {
+      "id": "explainability",
+      "description": "Her karar sensor contribution listesi taşır",
+      "passes": true
+    },
+    {
+      "id": "risk-gate",
+      "description": "Deterministik risk-gate ve MCP hook fail-closed çalışır",
+      "passes": true
+    },
+    {
+      "id": "watchdog",
+      "description": "Watchdog yalnızca risk azaltıcı aksiyon üretir",
+      "passes": true
+    },
+    {
+      "id": "dashboard",
+      "description": "Dashboard scorecard, freshness ve contribution waterfall gösterir",
+      "passes": true
+    },
+    {
+      "id": "live-executor",
+      "description": "Gate ALLOW + LIVE modunda spot_place_order ve order lookup çalışır",
+      "passes": true
+    },
+    {
+      "id": "telegram-hq",
+      "description": "Telegram HQ status ve why sorularını gerçek state'ten yanıtlar",
+      "passes": false
+    },
+    {
+      "id": "dry-run-soak",
+      "description": "Runner en az 30 dakika hatasız DRY_RUN çalışır",
+      "passes": false
+    },
+    {
+      "id": "mcp-live-smoke",
+      "description": "CANLI_TEST onaylı minimum write smoke testi tamamlanır",
+      "passes": true
+    }
   ]
 }
