@@ -1,302 +1,196 @@
 #!/usr/bin/env python3
-"""Deterministic market scout that triggers Claude only on actionable events."""
+"""Regime Desk runner: one deterministic loop, no LLM on the decision path.
+
+Every market read is an OKX ATK MCP call. Perception refreshes on three
+cadence tiers into a cache; the decision reads that cache, so a decision is
+never waiting on a network round-trip and never waiting on a model.
+"""
 
 from __future__ import annotations
 
 import argparse
 import fcntl
-import json
-import os
-import re
-import shlex
-import subprocess
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from features import build_features, microstructure
+import perception
+from atk import ATKClient, ATKError
+from execute import build_call, execute
 from journal import append_event, load_state, merge_state, utc_now
-from okx_public import PublicMarketClient, PublicMarketError
-from regime import classify_state
+from perception import number
+from regime import UNIVERSE, classify_state
 from risk_gate import evaluate as evaluate_risk
 from watchdog import evaluate as evaluate_watchdog
 
-SYMBOLS = ("BTC-USDT", "ETH-USDT", "SOL-USDT")
-HEARTBEAT_SECONDS = 10
-FAST_MARKET_SECONDS = 15
-REGIME_SECONDS = 120
-OI_SECONDS = 300
-AGENT_TIMEOUT_SECONDS = 180
-ENTRY_ACTIONS = {"OPEN_GRID", "BUY_BREAKOUT"}
+SYMBOLS = UNIVERSE
+LOOP_SECONDS = 5
+FAST_SECONDS = 5
+MID_SECONDS = 30
+SLOW_SECONDS = 120
+ACCOUNT_SECONDS = 20
+DECISION_SECONDS = 15
+SHOCK_COOLDOWN_SECONDS = 300
 RUNNER_LOCK = "/tmp/regime-desk-runner.lock"
-DEFAULT_AGENT_COMMAND = "claude -p --output-format json --permission-mode dontAsk --allowedTools 'Skill,Read,mcp__claude_ai_okx-agent-trade-kit__*_get_*' --no-session-persistence"
-
-
-def first(payload: list[object]) -> dict:
-    return payload[0] if payload and isinstance(payload[0], dict) else {}
-
-
-def number(value: object) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def parse_agent_output(stdout: str) -> dict:
-    envelope = json.loads(stdout)
-    raw = envelope.get("structured_output") or envelope.get("result", envelope) if isinstance(envelope, dict) else envelope
-    if isinstance(raw, dict):
-        return raw
-    if not isinstance(raw, str):
-        raise ValueError("agent sonucu JSON object değil")
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL | re.IGNORECASE)
-        if not fenced:
-            raise
-        parsed = json.loads(fenced.group(1))
-    if not isinstance(parsed, dict):
-        raise ValueError("agent sonucu JSON object değil")
-    return parsed
+BASES = {symbol.split("-")[0] for symbol in SYMBOLS}
 
 
 class Runner:
-    def __init__(self, market: PublicMarketClient | None = None, agent_command: str | None = None) -> None:
-        self.market = market or PublicMarketClient()
-        self.agent_command = agent_command or os.environ.get("REGIME_DESK_AGENT_COMMAND", DEFAULT_AGENT_COMMAND)
-        self.last_fast = self.last_regime = self.last_oi = 0.0
-        self.last_agent_event: str | None = None
-        self.background_agents = False
-        self.agent_process: subprocess.Popen | None = None
-        self.agent_meta: tuple[str, str | None, float] | None = None
+    def __init__(self, client: ATKClient | None = None) -> None:
+        self.client = client or ATKClient(read_only=True)
+        self.last = {"fast": 0.0, "mid": 0.0, "slow": 0.0, "account": 0.0, "decision": 0.0}
+        self.shock_latch: dict[str, float] = {}
+        self.live_armed = False
 
-    def public_read(self, label: str, call, *args):
+    # -- ATK reads --------------------------------------------------------
+    def timed(self, label: str, call, *args, **kwargs):
         started = time.monotonic()
         try:
-            result = call(*args)
+            result = call(*args, **kwargs)
         except Exception as exc:
-            append_event("MARKET_READ", "ERROR", f"Public OKX: {label} başarısız", {"provider": "OKX_PUBLIC", "error": str(exc)[:300]})
+            append_event("MARKET_READ", "ERROR", f"ATK MCP: {label} başarısız",
+                         {"provider": "OKX_ATK_MCP", "error": str(exc)[:300]})
             raise
-        append_event("MARKET_READ", "INFO", f"Public OKX: {label}", {"provider": "OKX_PUBLIC", "latency_ms": round((time.monotonic() - started) * 1000)})
+        append_event("MARKET_READ", "INFO", f"ATK MCP: {label}",
+                     {"provider": "OKX_ATK_MCP", "latency_ms": round((time.monotonic() - started) * 1000)})
         return result
 
+    def arm_live(self, live: bool) -> None:
+        """LIVE swaps the read-only ATK child for one that can place orders."""
+        if live == self.live_armed:
+            return
+        self.client.close()
+        self.client = ATKClient(read_only=not live)
+        self.live_armed = live
+        append_event("SYSTEM", "WARN", f"ATK MCP {'LIVE write' if live else 'read-only'} moduna alındı", {})
+
     def refresh_instruments(self) -> None:
-        instruments = {item.get("instId"): item for item in self.public_read("spot instruments", self.market.instruments) if isinstance(item, dict)}
-        state = load_state()
-        current = {item.get("symbol"): item for item in state.get("observation_symbols", [])}
+        rows = self.timed("spot instruments", self.client.call, "market_get_instruments", instType="SPOT")
+        catalog = {row.get("instId"): row for row in rows or [] if isinstance(row, dict)}
+        observations = self.observations()
         for symbol in SYMBOLS:
-            source = instruments.get(symbol)
+            source = catalog.get(symbol)
             if not source:
-                raise PublicMarketError(f"Instrument bulunamadı: {symbol}")
-            record = current.setdefault(symbol, {"symbol": symbol, "features": {}, "news": {}, "last_action": "HOLD"})
-            record["features"] = {**record.get("features", {}), "minSz": source.get("minSz"), "lotSz": source.get("lotSz"), "tickSz": source.get("tickSz"), "instrument_state": source.get("state")}
-        merge_state({"observation_symbols": [current[symbol] for symbol in SYMBOLS]})
+                raise ATKError(f"Instrument bulunamadı: {symbol}")
+            record = observations.setdefault(symbol, {"symbol": symbol, "features": {}, "sensors": {}})
+            record["features"] = {**record.get("features", {}), "minSz": source.get("minSz"),
+                                  "lotSz": source.get("lotSz"), "tickSz": source.get("tickSz"),
+                                  "instrument_state": source.get("state")}
+        self.save_observations(observations)
 
-    def refresh_fast_market(self) -> None:
+    def refresh_account(self) -> None:
+        rows = self.timed("account balance", self.client.call, "account_get_balance")
+        row = (rows or [{}])[0] if isinstance(rows, list) else rows
+        details = (row or {}).get("details") or []
+        nav = number((row or {}).get("totalEq"))
+        usdt = next((item for item in details if item.get("ccy") == "USDT"), {})
+        available = number(usdt.get("availBal"))
+        positions, exposure = [], 0.0
+        for item in details:
+            base = item.get("ccy")
+            if base not in BASES:
+                continue
+            value = number(item.get("eqUsd"))
+            if value <= 0.01:
+                continue
+            positions.append({"symbol": f"{base}-USDT", "base_amount": number(item.get("eq")),
+                              "exposure_usdt": round(value, 8), "owner": "DESK"})
+            exposure += value
+        if nav <= 0:
+            nav = available + exposure
+        if nav <= 0:
+            raise ATKError("ATK MCP account NAV doğrulanamadı")
+
         state = load_state()
-        current = {item.get("symbol"): item for item in state.get("observation_symbols", [])}
-        for symbol in SYMBOLS:
-            ticker = first(self.public_read(f"{symbol} ticker", self.market.ticker, symbol))
-            book = self.public_read(f"{symbol} book", self.market.books, symbol)
-            trades = self.public_read(f"{symbol} trades", self.market.trades, symbol)
-            record = current.setdefault(symbol, {"symbol": symbol, "features": {}, "news": {}, "last_action": "HOLD"})
-            previous_spread = number(record.get("features", {}).get("spread_baseline_pct"))
-            record.update(price=number(ticker.get("last")), market_observed_at=utc_now(), market_age_seconds=0)
-            record["features"] = {**record.get("features", {}), **microstructure({"data": book}, trades, previous_spread)}
-            record.setdefault("smart_money_status", "UNAVAILABLE")
-            if record["smart_money_status"] != "READY":
-                record["smart_money_veto"] = True
-            record.setdefault("news", {"status": "UNAVAILABLE", "high_impact_negative": False})
-        merge_state({"observation_symbols": [current[symbol] for symbol in SYMBOLS], "session": {"health": {"market": "READY"}}})
+        session = state.get("session", {})
+        patch = {
+            "session": {"health": {"mcp": "READY", "account": "READY"}},
+            "account": {"nav": round(nav, 8), "available_usdt": round(available, 8),
+                        "total_exposure_usdt": round(exposure, 8), "positions": positions,
+                        "account_observed_at": utc_now(), "account_age_seconds": 0,
+                        "drawdown_pct": nav / number(session.get("starting_nav"), nav) - 1 if number(session.get("starting_nav")) else 0.0},
+        }
+        if not session.get("starting_nav"):
+            patch["session"]["starting_nav"] = round(nav, 8)
+            patch["session"]["starting_inventory"] = {base: 0.0 for base in sorted(BASES)}
+        merge_state(patch)
+        # Exposure must reach the observations too, so REDUCE decisions can see it.
+        observations = self.observations()
+        held = {item["symbol"]: item["exposure_usdt"] for item in positions}
+        for symbol, record in observations.items():
+            record["exposure_usdt"] = held.get(symbol, 0.0)
+        self.save_observations(observations)
 
-    def refresh_oi(self) -> None:
+    # -- perception -------------------------------------------------------
+    def observations(self) -> dict[str, dict]:
+        return {item.get("symbol"): item for item in load_state().get("observation_symbols", [])}
+
+    def save_observations(self, observations: dict[str, dict]) -> None:
+        merge_state({"observation_symbols": [observations[symbol] for symbol in SYMBOLS if symbol in observations]})
+
+    def refresh_tier(self, tier: str) -> None:
+        refresh = {"fast": perception.refresh_fast, "mid": perception.refresh_mid, "slow": perception.refresh_slow}[tier]
+        observations = self.observations()
+        for symbol in SYMBOLS:
+            previous = observations.setdefault(symbol, {"symbol": symbol, "features": {}, "sensors": {}})
+            patch = self.timed(f"{symbol} {tier}", refresh, self.client, symbol, previous)
+            observations[symbol] = perception.merge_observation(previous, patch)
+        self.save_observations(observations)
+        merge_state({"session": {"health": {"market": "READY"}}})
+
+    # -- decision ---------------------------------------------------------
+    def shock_is_new(self, proposal: dict) -> bool:
+        """Edge-trigger SHOCK so one episode does not fire on every cycle."""
+        symbol = str(proposal.get("symbol") or "")
+        now = time.monotonic()
+        opened = self.shock_latch.get(symbol)
+        if opened and now - opened < SHOCK_COOLDOWN_SECONDS:
+            return False
+        self.shock_latch[symbol] = now
+        return True
+
+    def release_latches(self, symbols: list[dict]) -> None:
+        for item in symbols:
+            if item.get("regime") != "SHOCK":
+                self.shock_latch.pop(item.get("symbol"), None)
+
+    def decide(self) -> dict:
         state = load_state()
-        current = {item.get("symbol"): item for item in state.get("observation_symbols", [])}
-        for symbol in SYMBOLS:
-            payload = self.public_read(f"{symbol} OI", self.market.open_interest, symbol)
-            current[symbol]["open_interest"] = {"status": "READY", "observed_at": utc_now(), "data": first(payload)}
-        merge_state({"observation_symbols": [current[symbol] for symbol in SYMBOLS]})
+        symbols, proposal = classify_state(state)
+        self.release_latches(symbols)
+        merge_state({"symbols": symbols, "cycle": {"run_id": proposal["run_id"], "proposal": proposal,
+                                                   "execution": {"run_id": proposal["run_id"], "status": "NOT_SENT",
+                                                                 "tool": None, "client_order_id": None, "order_id": None}}})
+        level = "WARN" if proposal.get("regime") == "SHOCK" or proposal.get("action") == "REDUCE" else "INFO"
+        if proposal.get("regime") != "SHOCK" or self.shock_is_new(proposal):
+            append_event("DECISION", level, proposal.get("rationale_tr", "Karar"),
+                         {"symbol": proposal.get("symbol"), "regime": proposal.get("regime"),
+                          "action": proposal.get("action"), "conviction": proposal.get("conviction"),
+                          "scores": proposal.get("scores")}, proposal["run_id"])
 
-    def refresh_features(self) -> None:
         state = load_state()
-        current = {item.get("symbol"): item for item in state.get("observation_symbols", [])}
-        for symbol in SYMBOLS:
-            candles = self.public_read(f"{symbol} candles", self.market.candles, symbol)
-            book = self.public_read(f"{symbol} regime book", self.market.books, symbol)
-            price, features = build_features(candles, {"data": book})
-            record = current[symbol]
-            record.update(price=price, market_observed_at=utc_now(), market_age_seconds=0)
-            record["features"] = {**record.get("features", {}), **features}
-        merge_state({"observation_symbols": [current[symbol] for symbol in SYMBOLS], "session": {"health": {"market": "READY"}}})
+        # In LIVE the gate approves a concrete tool call, so it has to see one:
+        # attach the mapping before evaluating, not after.
+        # Always write the key, never only on the actionable branch: state is
+        # deep-merged, so a stale call from an earlier symbol would survive.
+        call = build_call(proposal) if state["session"]["mode"] == "LIVE" else None
+        proposal = {**proposal, "mcp_call": call}
+        merge_state({"cycle": {"proposal": proposal}})
+        state = load_state()
+        gate = evaluate_risk(state)
+        merge_state({"cycle": {"gate": gate}})
+        append_event("GATE", "ERROR" if gate["verdict"] == "HALT" else "INFO", f"Risk gate: {gate['verdict']}",
+                     {"reason_codes": gate["reason_codes"], "allowed_notional_usdt": gate["allowed_notional_usdt"]},
+                     proposal["run_id"])
 
-    def classify(self, *, shock_only: bool = False) -> dict | None:
-        symbols, proposal = classify_state(load_state())
-        if shock_only and proposal.get("regime") != "SHOCK":
-            return None
-        reason = "AGENT_CONTEXT_PENDING" if proposal.get("candidate_action") in ENTRY_ACTIONS else "NO_ACTION"
-        merge_state({"symbols": symbols, "cycle": {"run_id": proposal["run_id"], "proposal": proposal, "gate": {"run_id": proposal["run_id"], "verdict": "HOLD", "allowed_notional_usdt": 0, "reason_codes": [reason], "checked_at": None, "expires_at": proposal.get("expires_at"), "approved_call": None}, "execution": {"run_id": proposal["run_id"], "status": "NOT_SENT", "tool": None, "client_order_id": None, "order_id": None}}})
-        append_event("DECISION", "WARN" if proposal.get("regime") == "SHOCK" else "INFO", proposal.get("rationale_tr", "Deterministik karar"), {"source": "DETERMINISTIC", "symbol": proposal.get("symbol"), "regime": proposal.get("regime"), "action": proposal.get("action")}, proposal["run_id"])
+        if gate["verdict"] == "ALLOW" and state["session"]["mode"] == "LIVE":
+            self.arm_live(True)
+            execute(self.client, load_state())
+        elif gate["verdict"] == "ALLOW":
+            merge_state({"cycle": {"execution": {"run_id": proposal["run_id"], "status": "SIMULATED",
+                                                 "tool": "spot_place_order", "client_order_id": None, "order_id": None}}})
         return proposal
 
-    def trigger_agent(self, event: str, run_id: str | None = None) -> bool:
-        event_key = f"{event}:{run_id or ''}"
-        if event != "preflight" and event_key == self.last_agent_event:
-            return False
-        prompt = f"/desk {event} {run_id or ''}".strip()
-        started = time.monotonic()
-        completed = subprocess.run(shlex.split(self.agent_command) + [prompt], text=True, capture_output=True, timeout=AGENT_TIMEOUT_SECONDS, check=False)
-        self.last_agent_event = event_key
-        return self.handle_agent_completion(event, run_id, completed, started)
-
-    def handle_agent_completion(self, event: str, run_id: str | None, completed: subprocess.CompletedProcess, started: float) -> bool:
-        if completed.returncode:
-            append_event("SYSTEM", "ERROR", "Claude custom MCP görevi başarısız; fail-closed", {"event": event, "run_id": run_id, "error": (completed.stderr or completed.stdout)[:500]}, run_id)
-            if event == "preflight":
-                merge_state({"session": {"health": {"mcp": "ERROR", "account": "STALE", "trade_ready": False}}})
-            return False
-        try:
-            result = parse_agent_output(completed.stdout)
-            self.apply_agent_result(event, run_id, result)
-        except Exception as exc:
-            append_event("SYSTEM", "ERROR", "Claude sonucu geçersiz; fail-closed", {"event": event, "run_id": run_id, "error": str(exc)[:300], "stdout": completed.stdout[:500], "stderr": completed.stderr[:500]}, run_id)
-            return False
-        append_event("SYSTEM", "INFO", "Claude custom MCP görevi tamamlandı", {"event": event, "run_id": run_id, "latency_ms": round((time.monotonic() - started) * 1000)}, run_id)
-        return True
-
-    def request_agent(self, event: str, run_id: str | None = None) -> bool:
-        if not self.background_agents:
-            return self.trigger_agent(event, run_id)
-        if self.agent_process and self.agent_process.poll() is None:
-            append_event("SYSTEM", "WARN", "Claude görevi zaten çalışıyor; yeni istek fail-closed atlandı", {"event": event, "run_id": run_id}, run_id)
-            return False
-        event_key = f"{event}:{run_id or ''}"
-        if event != "preflight" and event_key == self.last_agent_event:
-            return False
-        prompt = f"/desk {event} {run_id or ''}".strip()
-        started = time.monotonic()
-        self.agent_process = subprocess.Popen(shlex.split(self.agent_command) + [prompt], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.agent_meta = (event, run_id, started)
-        self.last_agent_event = event_key
-        append_event("SYSTEM", "INFO", "Claude custom MCP görevi arka planda başlatıldı", {"event": event, "run_id": run_id}, run_id)
-        return True
-
-    def poll_agent(self) -> None:
-        if not self.agent_process or not self.agent_meta:
-            return
-        event, run_id, started = self.agent_meta
-        if self.agent_process.poll() is None:
-            if time.monotonic() - started <= AGENT_TIMEOUT_SECONDS:
-                return
-            self.agent_process.kill()
-            stdout, stderr = self.agent_process.communicate()
-            append_event("SYSTEM", "ERROR", "Claude custom MCP görevi timeout; fail-closed", {"event": event, "run_id": run_id, "stdout": stdout[:300], "stderr": stderr[:300]}, run_id)
-            self.agent_process = self.agent_meta = None
-            return
-        stdout, stderr = self.agent_process.communicate()
-        completed = subprocess.CompletedProcess([], self.agent_process.returncode, stdout, stderr)
-        self.agent_process = self.agent_meta = None
-        self.handle_agent_completion(event, run_id, completed, started)
-
-    def close(self) -> None:
-        if self.agent_process and self.agent_process.poll() is None:
-            self.agent_process.terminate()
-            try:
-                self.agent_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.agent_process.kill()
-                self.agent_process.wait(timeout=5)
-
-    def apply_private_account(self, result: dict) -> None:
-        account = result.get("account") or {}
-        nav = number(account.get("nav") or account.get("totalEqUsd"))
-        balances = account.get("balances") or []
-        usdt = next((item for item in balances if isinstance(item, dict) and item.get("ccy") == "USDT"), {})
-        available = number(account.get("available_usdt") or usdt.get("availBal"))
-        if nav <= 0:
-            raise ValueError("custom MCP account NAV doğrulanamadı")
-        state = load_state()
-        now = utc_now()
-        starting_nav = state.get("session", {}).get("starting_nav") or nav
-        merge_state({
-            "session": {"health": {"mcp": "READY", "account": "READY"}},
-            "account": {
-                "nav": nav,
-                "available_usdt": available,
-                "drawdown_pct": nav / starting_nav - 1 if starting_nav else 0,
-                "account_observed_at": now,
-                "account_age_seconds": 0,
-                "total_exposure_usdt": number(account.get("total_exposure_usdt")),
-                "positions": account.get("positions", state.get("account", {}).get("positions", [])),
-                "open_orders": account.get("open_orders", state.get("account", {}).get("open_orders", [])),
-                "recent_fills": account.get("recent_fills", state.get("account", {}).get("recent_fills", [])),
-            },
-        })
-        refreshed = load_state()
-        health = refreshed["session"]["health"]
-        health["trade_ready"] = all(health.get(key) == "READY" for key in ("mcp", "account", "market", "watchdog"))
-        merge_state({"session": {"health": health}})
-        append_event("MCP_READ", "INFO", "Custom MCP private account preflight tamamlandı", {"provider": "CLAUDE_CUSTOM_MCP", "nav": nav, "available_usdt": available})
-
-    def apply_agent_result(self, event: str, run_id: str | None, result: dict) -> None:
-        if event == "preflight":
-            self.apply_private_account(result)
-            return
-        if event != "candidate":
-            append_event("DECISION", "WARN", "Emergency context custom MCP ile değerlendirildi", {"reason_codes": result.get("reason_codes", []), "rationale_tr": result.get("rationale_tr")}, run_id)
-            return
-        state = load_state()
-        proposal = state.get("cycle", {}).get("proposal") or {}
-        if not run_id or proposal.get("run_id") != run_id or result.get("candidate_id") != run_id:
-            raise ValueError("candidate_id güncel state ile eşleşmiyor")
-        self.apply_private_account(result)
-        approved = bool(result.get("approve")) and not bool(result.get("smart_money_veto"))
-        proposal = {
-            **proposal,
-            "action": proposal.get("candidate_action") if approved else "HOLD",
-            "smart_money_veto": bool(result.get("smart_money_veto", True)),
-            "rationale_tr": result.get("rationale_tr") or "Agent bağlam değerlendirmesi tamamlandı.",
-            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=90)).isoformat(),
-        }
-        merge_state({"cycle": {"proposal": proposal}})
-        gate = evaluate_risk(load_state())
-        if load_state()["session"]["mode"] == "LIVE" and gate["verdict"] == "ALLOW":
-            gate = {**gate, "verdict": "HOLD", "allowed_notional_usdt": 0, "reason_codes": ["LIVE_EXECUTOR_NOT_ENABLED"], "approved_call": None}
-        merge_state({"cycle": {"gate": gate, "execution": {"run_id": run_id, "status": "SIMULATED" if gate["verdict"] == "ALLOW" else "NOT_SENT", "tool": None, "client_order_id": None, "order_id": None}}})
-        append_event("GATE", "INFO", f"Agent sonrası risk gate: {gate['verdict']}", {"reason_codes": gate["reason_codes"], "allowed_notional_usdt": gate["allowed_notional_usdt"]}, run_id)
-
-    def decision_cycle(self) -> None:
-        self.refresh_features()
-        proposal = self.classify()
-        if proposal and proposal.get("candidate_action") in ENTRY_ACTIONS:
-            self.request_agent("candidate", proposal["run_id"])
-        elif proposal and proposal.get("regime") == "SHOCK" and load_state().get("session", {}).get("mode") == "LIVE":
-            self.request_agent("emergency", proposal["run_id"])
-
-    def heartbeat(self) -> None:
-        state = load_state()
-        watchdog = evaluate_watchdog(state)
-        now = datetime.now(timezone.utc)
-        ages = [self.age(item.get("market_observed_at"), now) for item in state.get("observation_symbols", [])]
-        market_health = "READY" if len(ages) == len(SYMBOLS) and all(age is not None and age <= 20 for age in ages) else "STALE"
-        account_age = self.age(state.get("account", {}).get("account_observed_at"), now)
-        account_health = "READY" if account_age is not None and account_age <= 30 else "STALE"
-        mcp_health = state.get("session", {}).get("health", {}).get("mcp", "UNKNOWN")
-        trade_ready = mcp_health == account_health == market_health == "READY"
-        merge_state({"session": {"mode": watchdog["mode"], "heartbeat_at": utc_now(), "health": {"mcp": mcp_health, "account": account_health, "market": market_health, "watchdog": "READY", "trade_ready": trade_ready}}, "account": {"account_age_seconds": round(account_age, 3) if account_age is not None else None}, "watchdog": {"status": watchdog["status"], "last_check_at": watchdog["checked_at"], "last_action": watchdog["reason"]}})
-        if watchdog["actions"]:
-            append_event("WATCHDOG", "WARN", watchdog["reason"] or "Emergency gerekli", {"actions": watchdog["actions"]})
-            self.request_agent("emergency", watchdog["reason"])
-        if state.get("session", {}).get("flatten_requested"):
-            self.request_agent("emergency", "USER_FLATTEN")
-        if state.get("session", {}).get("private_preflight_requested"):
-            if not self.agent_process or self.agent_process.poll() is not None:
-                success = self.request_agent("preflight")
-                patch = {"session": {"private_preflight_requested": False}}
-                if not success:
-                    patch["session"]["health"] = {"mcp": "ERROR", "account": "STALE", "trade_ready": False}
-                merge_state(patch)
-
+    # -- housekeeping -----------------------------------------------------
     @staticmethod
     def age(value: str | None, now: datetime) -> float | None:
         if not value:
@@ -306,52 +200,75 @@ class Runner:
         except ValueError:
             return None
 
+    def heartbeat(self) -> None:
+        state = load_state()
+        watchdog = evaluate_watchdog(state)
+        now = datetime.now(timezone.utc)
+        ages = [self.age(item.get("market_observed_at"), now) for item in state.get("observation_symbols", [])]
+        market = "READY" if len(ages) == len(SYMBOLS) and all(age is not None and age <= 60 for age in ages) else "STALE"
+        account_age = self.age(state.get("account", {}).get("account_observed_at"), now)
+        account = "READY" if account_age is not None and account_age <= 30 else "STALE"
+        mcp = "READY" if self.client.alive() else "ERROR"
+        merge_state({
+            "session": {"mode": watchdog["mode"], "heartbeat_at": utc_now(),
+                        "health": {"mcp": mcp, "account": account, "market": market, "watchdog": "READY",
+                                   "trade_ready": mcp == account == market == "READY"}},
+            "account": {"account_age_seconds": round(account_age, 3) if account_age is not None else None},
+            "watchdog": {"status": watchdog["status"], "last_check_at": watchdog["checked_at"],
+                         "last_action": watchdog["reason"]},
+        })
+        if watchdog["actions"]:
+            append_event("WATCHDOG", "WARN", watchdog["reason"] or "Risk azaltma gerekli", {"actions": watchdog["actions"]})
+        if state.get("session", {}).get("mode") != "LIVE" and self.live_armed:
+            self.arm_live(False)
+
+    def close(self) -> None:
+        self.client.close()
+
+    # -- entry points -----------------------------------------------------
     def preflight(self) -> None:
         state = load_state()
-        session_patch = {"health": {"mcp": "ON_DEMAND", "account": "STALE", "trade_ready": False}}
         if state.get("session", {}).get("mode") == "DISCONNECTED":
-            session_patch["mode"] = "DRY_RUN"
-        merge_state({"session": session_patch})
+            merge_state({"session": {"mode": "DRY_RUN"}})
+        self.client.start()
+        append_event("SYSTEM", "INFO", "ATK MCP bağlandı", {"tools": len(self.client.tools), "modules": self.client.modules})
         self.refresh_instruments()
-        self.refresh_fast_market()
-        self.refresh_oi()
-        self.refresh_features()
+        self.refresh_account()
+        for tier in ("mid", "fast", "slow"):
+            self.refresh_tier(tier)
         self.heartbeat()
-        append_event("SYSTEM", "INFO", "Public deterministic runner preflight tamamlandı", {"provider": "OKX_PUBLIC", "custom_mcp": "CLAUDE_OWNED"})
+        append_event("SYSTEM", "INFO", "Runner preflight tamamlandı", {"provider": "OKX_ATK_MCP", "symbols": list(SYMBOLS)})
 
     def once(self) -> None:
         self.preflight()
-        proposal = self.classify()
-        if proposal and proposal.get("candidate_action") in ENTRY_ACTIONS:
-            self.trigger_agent("candidate", proposal["run_id"])
+        self.decide()
 
     def run(self) -> None:
-        self.background_agents = True
         self.preflight()
-        started = time.monotonic()
-        self.last_fast = self.last_regime = self.last_oi = started
-        append_event("SYSTEM", "INFO", "Event-driven runner başladı", {"fast_market_s": FAST_MARKET_SECONDS, "regime_s": REGIME_SECONDS, "oi_s": OI_SECONDS})
+        now = time.monotonic()
+        self.last = {key: now for key in self.last}
+        append_event("SYSTEM", "INFO", "Deterministik runner başladı",
+                     {"fast_s": FAST_SECONDS, "mid_s": MID_SECONDS, "slow_s": SLOW_SECONDS, "decision_s": DECISION_SECONDS})
         while True:
             now = time.monotonic()
             try:
-                self.poll_agent()
                 self.heartbeat()
-                if now - self.last_fast >= FAST_MARKET_SECONDS:
-                    self.refresh_fast_market()
-                    shock = self.classify(shock_only=True)
-                    if shock and load_state().get("session", {}).get("mode") == "LIVE":
-                        self.request_agent("emergency", shock["run_id"])
-                    self.last_fast = now
-                if now - self.last_oi >= OI_SECONDS:
-                    self.refresh_oi(); self.last_oi = now
-                if now - self.last_regime >= REGIME_SECONDS:
-                    self.decision_cycle(); self.last_regime = now
+                for tier, interval in (("fast", FAST_SECONDS), ("mid", MID_SECONDS), ("slow", SLOW_SECONDS)):
+                    if now - self.last[tier] >= interval:
+                        self.refresh_tier(tier)
+                        self.last[tier] = now
+                if now - self.last["account"] >= ACCOUNT_SECONDS:
+                    self.refresh_account()
+                    self.last["account"] = now
+                if now - self.last["decision"] >= DECISION_SECONDS:
+                    self.decide()
+                    self.last["decision"] = now
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
                 merge_state({"session": {"health": {"market": "ERROR", "trade_ready": False}}})
                 append_event("SYSTEM", "ERROR", "Runner turu fail-closed tamamlandı", {"error": str(exc)[:500]})
-            time.sleep(HEARTBEAT_SECONDS)
+            time.sleep(LOOP_SECONDS)
 
 
 def main() -> int:
@@ -364,17 +281,18 @@ def main() -> int:
     except BlockingIOError:
         print("ERROR: başka bir Regime Desk runner zaten çalışıyor")
         return 1
+    runner = Runner()
     try:
-        runner = Runner()
         getattr(runner, args.command)()
-    except (PublicMarketError, OSError) as exc:
-        merge_state({"session": {"health": {"market": "ERROR", "trade_ready": False}}})
-        append_event("SYSTEM", "ERROR", "Public runner başlatılamadı", {"error": str(exc)[:500]})
+    except (ATKError, OSError) as exc:
+        merge_state({"session": {"health": {"mcp": "ERROR", "trade_ready": False}}})
+        append_event("SYSTEM", "ERROR", "Runner başlatılamadı", {"error": str(exc)[:500]})
         print(f"ERROR: {exc}")
         return 1
+    except KeyboardInterrupt:
+        print("\nRunner durduruldu")
     finally:
-        if "runner" in locals():
-            runner.close()
+        runner.close()
         lock_handle.close()
     return 0
 
