@@ -59,7 +59,7 @@ telegram = DeskTelegram(
     allowed_user_ids=allowed,
     webhook_secret=ENV.get("TELEGRAM_WEBHOOK_SECRET"),
     webhook_url=PUBLIC_URL,
-    parse_mode=None,
+    parse_mode="Markdown",
     typing_indicator=True,
 )
 
