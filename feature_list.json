@@ -6,7 +6,7 @@
     {"id": "risk-gate", "description": "Deterministik risk-gate ve MCP hook fail-closed çalışır", "passes": true},
     {"id": "watchdog", "description": "Watchdog yalnızca risk azaltıcı aksiyon üretir", "passes": true},
     {"id": "dashboard", "description": "Statik dashboard güncel redakte edilmiş state'i gösterir", "passes": true},
-    {"id": "mcp-read", "description": "Gerçek OKX account ve market read preflight tamamlanır", "passes": false},
+    {"id": "mcp-read", "description": "Gerçek OKX account ve market read preflight tamamlanır", "passes": true},
     {"id": "mcp-live-smoke", "description": "CANLI_TEST onaylı minimum write smoke testi tamamlanır", "passes": false}
   ]
 }
