@@ -54,7 +54,8 @@ def build_agent():
     os.environ["ANTHROPIC_API_KEY"] = key
     from upsonic import Agent
 
-    return Agent(model=MODEL, name="Regime Desk HQ", system_prompt=SYSTEM_PROMPT, retry=1)
+    return Agent(model=MODEL, name="Regime Desk HQ", system_prompt=SYSTEM_PROMPT,
+                 tools=list(ALL_TOOLS), retry=1)
 
 
 def ask(question: str) -> str:
@@ -62,8 +63,7 @@ def ask(question: str) -> str:
     from upsonic import Task
 
     agent = build_agent()
-    task = Task(description=question, tools=list(ALL_TOOLS))
-    answer = agent.do(task, timeout=TIMEOUT_SECONDS)
+    answer = agent.do(Task(description=question), timeout=TIMEOUT_SECONDS)
     text = str(answer).strip() if answer is not None else ""
     return text or "HQ yanıt üretemedi."
 

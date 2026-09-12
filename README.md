@@ -133,17 +133,22 @@ token is matched **in the webhook handler before the model is invoked**, and the
 executed by `scripts/execute.py` through the same risk gate as any other order. The agent cannot
 buy, sell, size, or arm anything, and a wrong token never consumes the pending request.
 
+Transport is Upsonic's `TelegramInterface`, which owns the webhook route, the secret-token
+check, the user allowlist, chat sessions and message splitting. `scripts/api.py` only subclasses
+it to add the guard, and is under 80 lines.
+
 Setup:
 
 ```bash
 pip install -r requirements.txt
-uvicorn api:app --host 127.0.0.1 --port 8900 --app-dir scripts
 ngrok http 8900
-python3 scripts/set_webhook.py https://<your>.ngrok-free.app
+# put the tunnel in .env as HQ_PUBLIC_URL, then:
+uvicorn api:app --host 127.0.0.1 --port 8900 --app-dir scripts
 ```
 
-`.env` needs `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET` and
-`ANTHROPIC_API_KEY`. Messages from any other chat id are dropped.
+The webhook registers itself on startup from `HQ_PUBLIC_URL`. `.env` also needs
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET` and `ANTHROPIC_API_KEY`.
+Messages from any other user id are dropped.
 
 ## Safety
 
