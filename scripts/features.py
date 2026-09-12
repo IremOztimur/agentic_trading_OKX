@@ -49,18 +49,30 @@ def atr(candles: list[list[float]], period: int = 14) -> float:
     return mean(values[-period:]) if values else 0.0
 
 
+def directional_index(plus_dm: list[float], minus_dm: list[float], true_ranges: list[float]) -> float:
+    tr = sum(true_ranges)
+    if tr <= 0:
+        return 0.0
+    plus_di, minus_di = 100 * sum(plus_dm) / tr, 100 * sum(minus_dm) / tr
+    return 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if plus_di + minus_di else 0.0
+
+
 def adx(candles: list[list[float]], period: int = 14) -> float:
+    """ADX is the average of DX over `period` bars; a single DX reads 100 on a
+    flat tape where one directional movement is zero, so it must be smoothed."""
     plus_dm, minus_dm, true_ranges = [], [], []
     for previous, current in zip(candles, candles[1:]):
         up, down = current[2] - previous[2], previous[3] - current[3]
         plus_dm.append(up if up > down and up > 0 else 0.0)
         minus_dm.append(down if down > up and down > 0 else 0.0)
         true_ranges.append(max(current[2] - current[3], abs(current[2] - previous[4]), abs(current[3] - previous[4])))
-    tr = sum(true_ranges[-period:])
-    if tr <= 0:
-        return 0.0
-    plus_di, minus_di = 100 * sum(plus_dm[-period:]) / tr, 100 * sum(minus_dm[-period:]) / tr
-    return 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if plus_di + minus_di else 0.0
+    if len(true_ranges) < period:
+        return directional_index(plus_dm, minus_dm, true_ranges)
+    windows = [
+        directional_index(plus_dm[end - period:end], minus_dm[end - period:end], true_ranges[end - period:end])
+        for end in range(period, len(true_ranges) + 1)
+    ]
+    return mean(windows[-period:]) if windows else 0.0
 
 
 def book_rows(payload: Any) -> tuple[list[Any], list[Any]]:
