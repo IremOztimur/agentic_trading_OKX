@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """FastAPI service exposing the desk to Telegram.
 
-Upsonic's TelegramInterface owns the transport: webhook route, secret token,
-user allowlist, chat sessions, typing indicators, message splitting. The only
-thing added here is the guard on the one financial action — the confirmation
-token is matched before the agent is invoked, so no model sits between the
-operator and a position being closed.
+Upsonic's TelegramInterface owns everything here: webhook route, secret token,
+user allowlist, chat sessions, and the Confirm/Reject buttons for tools marked
+`requires_confirmation`. Those tools pause before their body runs, so the
+operator — never the model — authorizes anything that moves money.
 """
 
 from __future__ import annotations
@@ -18,41 +17,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from fastapi import FastAPI
 from upsonic.interfaces.telegram import TelegramInterface
-from upsonic.interfaces.telegram.schemas import TelegramMessage
 
 from atk import load_env
-from desk_tools import FLATTEN_TOKEN, confirm_flatten, get_desk_status, pending_flatten
+from desk_tools import get_desk_status
 from hq_agent import build_agent
-from journal import append_event
 
 ENV = load_env()
 PUBLIC_URL = ENV.get("HQ_PUBLIC_URL") or None
 
 
-class DeskTelegram(TelegramInterface):
-    """TelegramInterface with one message the agent never sees."""
-
-    async def _process_text_message(self, message: TelegramMessage, user_id: int, chat_id: int) -> None:
-        text = (message.text or "").strip()
-        if text != FLATTEN_TOKEN:
-            await super()._process_text_message(message, user_id, chat_id)
-            return
-
-        result = confirm_flatten(text)
-        if result["executed"]:
-            answer = (f"✅ Flatten runner'a iletildi. Kapatılan exposure: "
-                      f"{result['exposure_usdt']:.4f} USDT.\nPozisyonlar bir sonraki döngüde kapanır.")
-        elif result["reason"] == "NO_PENDING_REQUEST":
-            answer = "Bekleyen bir flatten isteği yok. Önce 'flatten everything' de."
-        else:
-            answer = f"Flatten yürütülemedi: {result.get('detail') or result['reason']}"
-        append_event("SYSTEM", "WARN", "HQ flatten token işlendi",
-                     {"executed": result["executed"], "reason": result.get("reason")})
-        await self.telegram_tools.asend_message(chat_id=chat_id, text=answer)
-
-
 allowed = [int(ENV["TELEGRAM_CHAT_ID"])] if ENV.get("TELEGRAM_CHAT_ID") else None
-telegram = DeskTelegram(
+telegram = TelegramInterface(
     agent=build_agent(),
     bot_token=ENV.get("TELEGRAM_BOT_TOKEN"),
     name="Regime Desk HQ",
@@ -76,4 +51,4 @@ def health() -> dict:
                 "exposure_usdt": status.get("total_exposure_usdt")}
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:200]}
-    return {"ok": True, "desk": desk, "pending_confirmation": bool(pending_flatten())}
+    return {"ok": True, "desk": desk}

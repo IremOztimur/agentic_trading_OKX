@@ -176,48 +176,62 @@ class LiveCallOrderingTests(unittest.TestCase):
         self.assertFalse(risk_gate.FORBIDDEN_WRITE.search("spot_place_order"))
 
 
-class FlattenConfirmationTests(unittest.TestCase):
-    """The only financial action HQ can reach is settled by Python, not the model."""
+class ConfirmedToolTests(unittest.TestCase):
+    """Anything that moves money must pause for a human before its body runs."""
 
     def setUp(self):
-        import tempfile
-
         import desk_tools
         self.tools = desk_tools
-        # Never touch the live confirmation file: a stray test must not be able
-        # to arm or consume a real flatten.
-        self.temp = tempfile.TemporaryDirectory()
-        self.original = desk_tools.PENDING_PATH
-        desk_tools.PENDING_PATH = pathlib.Path(self.temp.name) / "pending.json"
+        # Tests must not write WARN/ERROR rows into the live audit journal.
+        self.original_event = desk_tools.append_event
+        desk_tools.append_event = lambda *args, **kwargs: None
 
     def tearDown(self):
-        self.tools.PENDING_PATH = self.original
-        self.temp.cleanup()
+        self.tools.append_event = self.original_event
 
-    def test_a_wrong_token_never_executes(self):
-        self.tools.request_flatten()
-        self.assertEqual(self.tools.confirm_flatten("flatten")["reason"], "TOKEN_MISMATCH")
-        self.assertEqual(self.tools.confirm_flatten("yes")["reason"], "TOKEN_MISMATCH")
-        self.assertIsNotNone(self.tools.pending_flatten())  # still staged, nothing consumed
+    def test_money_moving_tools_require_confirmation(self):
+        for func in self.tools.CONFIRMED_TOOLS:
+            with self.subTest(tool=func.__name__):
+                config = getattr(func, "_upsonic_tool_config", None)
+                self.assertIsNotNone(config, f"{func.__name__} is not a registered tool")
+                self.assertTrue(config.requires_confirmation,
+                                f"{func.__name__} would run without asking the operator")
 
-    def test_the_token_alone_executes_nothing(self):
-        self.assertEqual(self.tools.confirm_flatten("FLATTEN")["reason"], "NO_PENDING_REQUEST")
+    def test_read_tools_are_not_gated(self):
+        for func in self.tools.READ_TOOLS:
+            config = getattr(func, "_upsonic_tool_config", None)
+            self.assertIsNone(config)
 
-    def test_requesting_a_flatten_closes_nothing_by_itself(self):
-        result = self.tools.request_flatten()
-        self.assertTrue(result["staged"])
-        self.assertNotIn("executed", result)
-        self.assertIsNotNone(self.tools.pending_flatten())
+    def test_the_agent_gets_exactly_these_tools(self):
+        self.assertEqual(len(self.tools.ALL_TOOLS), 5)
+        self.assertEqual(set(self.tools.CONFIRMED_TOOLS),
+                         {self.tools.flatten_positions, self.tools.arm_live})
 
-    def test_an_expired_confirmation_is_dropped(self):
-        import json
-        from datetime import datetime, timedelta, timezone
-        self.tools.request_flatten()
-        stale = json.loads(self.tools.PENDING_PATH.read_text())
-        stale["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
-        self.tools.PENDING_PATH.write_text(json.dumps(stale))
-        self.assertIsNone(self.tools.pending_flatten())
-        self.assertEqual(self.tools.confirm_flatten("FLATTEN")["reason"], "NO_PENDING_REQUEST")
+    def test_writes_go_through_control_with_its_safety_word(self):
+        """Neither tool touches the exchange itself; both defer to control.py."""
+        seen = []
+        original = self.tools.run_control
+        self.tools.run_control = lambda *args: (seen.append(args), (True, "ok"))[1]
+        try:
+            self.tools.flatten_positions()
+            self.tools.arm_live()
+        finally:
+            self.tools.run_control = original
+        self.assertIn(("flatten", "FLATTEN"), seen)
+        self.assertIn(("live", "CANLI"), seen)
+
+    def test_a_failed_control_call_is_reported_not_swallowed(self):
+        original = self.tools.run_control
+        self.tools.run_control = lambda *args: (False, "LIVE reddedildi: preflight hazır değil")
+        try:
+            result = self.tools.arm_live()
+        finally:
+            self.tools.run_control = original
+        from journal import load_state
+        self.assertFalse(result["executed"])
+        self.assertIn("preflight", result["detail"])
+        # A refused arm must leave the mode exactly as it found it.
+        self.assertEqual(result["mode_after"], load_state()["session"]["mode"])
 
 
 class SymbolToolTests(unittest.TestCase):

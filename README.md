@@ -103,12 +103,13 @@ python3 scripts/control.py flatten FLATTEN
 A FastAPI service forwards every Telegram message to Claude (via the Upsonic agent framework),
 which answers by calling tools that read the desk's real state:
 
-| Tool | Answers |
-|---|---|
-| `get_desk_status()` | mode, NAV, session P&L, exposure, positions, last decision, gate verdict |
-| `get_symbol_decision(symbol)` | regime, conviction, every sensor's signed contribution, that symbol's P&L |
-| `get_recent_changes(minutes)` | regime flips, gate events and real orders in the window |
-| `request_flatten()` | stages a confirmation — **closes nothing** |
+| Tool | Does | Gated |
+|---|---|---|
+| `get_desk_status()` | mode, NAV, session P&L, exposure, positions, last decision, gate verdict | — |
+| `get_symbol_decision(symbol)` | regime, conviction, every sensor's signed contribution, that symbol's P&L | — |
+| `get_recent_changes(minutes)` | regime flips, gate events and real orders in the window | — |
+| `flatten_positions()` | closes every position and halts new risk | Confirm/Reject |
+| `arm_live()` | arms LIVE so the desk can place real orders | Confirm/Reject |
 
 ```text
 You:  How am I doing?
@@ -120,18 +121,24 @@ HQ:   ETH is down -0.06% unrealized. Trend +0.29 and smart money +0.09 are
       0.0291 USDT of fees across 28 fills.
 
 You:  Flatten everything.
-HQ:   Flatten request staged. ETH-USDT 5.9442 USDT will be closed.
-      Reply with the exact word FLATTEN to confirm.
-
-You:  FLATTEN
-HQ:   Flatten sent to the runner.
+HQ:   Closing all positions and halting new risk.
+      [ Confirm ]  [ Reject ]        <- inline buttons, not a typed word
 ```
 
 Claude can inspect and operate the desk, but every financial action still passes through
-deterministic controls. `request_flatten` only writes a pending record; the literal `FLATTEN`
-token is matched **in the webhook handler before the model is invoked**, and the close itself is
-executed by `scripts/execute.py` through the same risk gate as any other order. The agent cannot
-buy, sell, size, or arm anything, and a wrong token never consumes the pending request.
+deterministic controls, in three layers:
+
+1. **The agent cannot approve itself.** `flatten_positions` and `arm_live` are declared
+   `requires_confirmation=True`, so Upsonic raises a `ConfirmationPause` *before the function
+   body runs* and Telegram renders Confirm/Reject buttons. Verified: asking to flatten returns
+   `is_paused=True, pause_reason=confirmation` with the body untouched.
+2. **The tools do not touch the exchange.** They shell out to `scripts/control.py`, which still
+   demands its own literal safety word (`FLATTEN`, `CANLI`) and refuses to arm LIVE unless every
+   preflight health check is READY and the runner heartbeat is fresh.
+3. **The risk gate is unchanged.** The actual selling is done by the runner through
+   `scripts/execute.py` and the same gate as any other order.
+
+The agent can never buy, size, or set a limit at all — there is no tool for it.
 
 Transport is Upsonic's `TelegramInterface`, which owns the webhook route, the secret-token
 check, the user allowlist, chat sessions and message splitting. `scripts/api.py` only subclasses

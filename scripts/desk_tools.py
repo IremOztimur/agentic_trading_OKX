@@ -2,9 +2,10 @@
 """Tools the HQ agent may call.
 
 Reads come straight from `run/state.json`, `run/events.jsonl` and live OKX
-fills. The only write the agent can reach is `request_flatten`, and that one
-does not flatten — it stages a confirmation that a human must complete with a
-literal token, checked in Python before the agent is ever invoked.
+fills. The two tools that move money are marked `requires_confirmation`, so
+Upsonic raises a ConfirmationPause before the function body runs and Telegram
+shows the operator Confirm/Reject buttons. The model cannot approve its own
+call, and underneath, `control.py` still demands its literal safety word.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from upsonic.tools import tool
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -25,9 +28,9 @@ from perception import number
 from pnl import portfolio_pnl, position_pnl
 from regime import UNIVERSE
 
-PENDING_PATH = ROOT / "run" / "pending.json"
-CONFIRMATION_TTL_SECONDS = 180
+CONTROL = ROOT / "scripts" / "control.py"
 FLATTEN_TOKEN = "FLATTEN"
+LIVE_TOKEN = "CANLI"
 
 _client: ATKClient | None = None
 
@@ -159,75 +162,60 @@ def get_recent_changes(minutes: int = 15) -> dict[str, Any]:
     }
 
 
-# -- the one guarded write ------------------------------------------------
+# -- confirmed writes -----------------------------------------------------
+# Both of these pause for a human before their body runs. Neither talks to the
+# exchange directly: they go through control.py, which the runner obeys.
 
-def request_flatten() -> dict[str, Any]:
-    """Ask to close every open position. This does NOT close anything: it
-    stages a confirmation and returns what would be closed. The human must
-    then reply with the exact word FLATTEN, which is verified outside this
-    agent. Use this when the operator asks to flatten, close everything, or
-    exit all positions.
+def run_control(*args: str) -> tuple[bool, str]:
+    completed = subprocess.run([sys.executable, str(CONTROL), *args], capture_output=True,
+                               text=True, cwd=str(ROOT), timeout=30, check=False)
+    detail = (completed.stdout or completed.stderr).strip()
+    return completed.returncode == 0, detail[:300]
+
+
+@tool(requires_confirmation=True)
+def flatten_positions() -> dict[str, Any]:
+    """Close every open position on the desk and halt new risk.
+
+    The operator is shown Confirm/Reject buttons before this runs; you cannot
+    approve it yourself. Use it when the operator asks to flatten, close
+    everything, or exit all positions.
     """
     state = load_state()
     account = state.get("account", {})
     exposure = number(account.get("total_exposure_usdt"))
     positions = [{"symbol": p.get("symbol"), "exposure_usdt": p.get("exposure_usdt")}
                  for p in account.get("positions", [])]
-    expires = datetime.now(timezone.utc) + timedelta(seconds=CONFIRMATION_TTL_SECONDS)
-    PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PENDING_PATH.write_text(json.dumps({
-        "action": "FLATTEN", "exposure_usdt": exposure, "positions": positions,
-        "staged_at": datetime.now(timezone.utc).isoformat(), "expires_at": expires.isoformat(),
-    }, ensure_ascii=False), encoding="utf-8")
-    append_event("SYSTEM", "WARN", "HQ flatten onayı beklemede",
-                 {"exposure_usdt": exposure, "expires_at": expires.isoformat()})
-    return {
-        "staged": True, "exposure_usdt": exposure, "positions": positions,
-        "expires_in_seconds": CONFIRMATION_TTL_SECONDS,
-        "instruction": f"Tell the operator to reply with the exact word {FLATTEN_TOKEN} to confirm. "
-                       "You cannot confirm it yourself and you must not claim anything was closed.",
-    }
-
-
-def pending_flatten() -> dict[str, Any] | None:
-    """The staged confirmation, if one exists and has not expired."""
-    if not PENDING_PATH.exists():
-        return None
-    try:
-        pending = json.loads(PENDING_PATH.read_text(encoding="utf-8"))
-        expires = datetime.fromisoformat(pending["expires_at"])
-    except (json.JSONDecodeError, KeyError, ValueError):
-        return None
-    if datetime.now(timezone.utc) > expires:
-        PENDING_PATH.unlink(missing_ok=True)
-        return None
-    return pending
-
-
-def confirm_flatten(token: str) -> dict[str, Any]:
-    """Deterministic gate for the only financial action HQ can reach.
-
-    Never called by the model — the webhook checks the literal token first.
-    """
-    if token.strip() != FLATTEN_TOKEN:
-        return {"executed": False, "reason": "TOKEN_MISMATCH"}
-    pending = pending_flatten()
-    if not pending:
-        return {"executed": False, "reason": "NO_PENDING_REQUEST"}
-    PENDING_PATH.unlink(missing_ok=True)
-    completed = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "control.py"), "flatten", FLATTEN_TOKEN],
-        capture_output=True, text=True, cwd=str(ROOT), timeout=30, check=False,
-    )
-    ok = completed.returncode == 0
+    ok, detail = run_control("flatten", FLATTEN_TOKEN)
     append_event("SYSTEM", "WARN" if ok else "ERROR",
-                 "HQ flatten onaylandı ve runner'a iletildi" if ok else "HQ flatten başarısız",
-                 {"exposure_usdt": pending.get("exposure_usdt"),
-                  "stdout": completed.stdout[:200], "stderr": completed.stderr[:200]})
-    return {"executed": ok, "exposure_usdt": pending.get("exposure_usdt"),
-            "positions": pending.get("positions"),
-            "detail": (completed.stdout or completed.stderr).strip()[:300]}
+                 "HQ flatten onaylandı" if ok else "HQ flatten başarısız",
+                 {"exposure_usdt": exposure, "detail": detail})
+    return {"executed": ok, "closing_exposure_usdt": round(exposure, 4), "positions": positions,
+            "mode_after": "HALTED" if ok else state.get("session", {}).get("mode"),
+            "detail": detail,
+            "note": "Runner bir sonraki döngüde satış emirlerini gönderir." if ok else ""}
+
+
+@tool(requires_confirmation=True)
+def arm_live() -> dict[str, Any]:
+    """Arm LIVE mode so the desk can place real spot orders.
+
+    The operator is shown Confirm/Reject buttons before this runs. control.py
+    refuses unless every preflight health check is READY and the runner
+    heartbeat is fresh, so this can fail for good reasons — report the reason
+    verbatim if it does.
+    """
+    state = load_state()
+    health = state.get("session", {}).get("health", {})
+    ok, detail = run_control("live", LIVE_TOKEN)
+    append_event("SYSTEM", "WARN" if ok else "ERROR",
+                 "HQ LIVE moduna aldı" if ok else "HQ LIVE arm reddedildi",
+                 {"detail": detail, "health": health})
+    return {"executed": ok, "mode_after": "LIVE" if ok else state.get("session", {}).get("mode"),
+            "health": health, "detail": detail,
+            "note": "Desk artık gerçek spot emir gönderebilir." if ok else ""}
 
 
 READ_TOOLS = [get_desk_status, get_symbol_decision, get_recent_changes]
-ALL_TOOLS = READ_TOOLS + [request_flatten]
+CONFIRMED_TOOLS = [flatten_positions, arm_live]
+ALL_TOOLS = READ_TOOLS + CONFIRMED_TOOLS
