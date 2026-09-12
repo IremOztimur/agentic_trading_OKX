@@ -32,6 +32,7 @@ Kontrol komutları:
 
 ```bash
 python3 scripts/control.py status
+python3 scripts/control.py preflight
 python3 scripts/control.py live CANLI
 python3 scripts/control.py pause
 python3 scripts/control.py resume
@@ -39,6 +40,8 @@ python3 scripts/control.py flatten FLATTEN
 ```
 
 `run/state.json` tek güncel state, `run/events.jsonl` tek geçmiş kaydıdır. Panel `static/data/dashboard.json` içindeki redakte edilmiş yansımayı okur. Gerçek account snapshot alınmadan demo NAV veya position gösterilmez.
+
+`control.py preflight`, çalışan runner'a salt-okunur bir custom MCP account kontrolü kuyruğa alır. Bu komut emir göndermez. Runner kodu güncellendiyse önce çalışan runner durdurulup yeniden başlatılmalıdır.
 
 ## Test
 

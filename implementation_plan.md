@@ -15,6 +15,7 @@ Kabul: ikinci runner başlamayı reddeder; heartbeat gerçek süreç yaşamını
 - [x] Runner içindeki ikinci OAuth/MCP istemcisini kaldır.
 - [x] Mevcut Claude custom MCP bağlantısını yalnızca candidate/emergency event'inde kullan.
 - [x] Agent komutunu `*_get_*` read araçlarıyla sınırla.
+- [x] Canlı para riske atmadan private bağlantıyı ölçmek için runner-owned `control.py preflight` kuyruğu ekle.
 
 Kabul: public preflight credentials olmadan tamamlandı; candidate agent mevcut custom MCP üzerinden doğru sub-account'ı okur; token/secret loglanmaz.
 
@@ -65,7 +66,7 @@ Kabul: LLM çıktısı tek başına write üretemez; gate dışı her çağrı r
 - [x] Watchdog'u runner heartbeat turuna dahil et.
 - [x] Stale main cycle durumunda PAUSED + cancel/stop uygula.
 - [ ] Hard drawdown/safe-close/FLATTEN talebinde custom MCP executor ile yalnızca agent-owned inventory'yi kapat.
-- [x] `control.py` ile status/live/pause/resume/flatten komutlarını ayır.
+- [x] `control.py` ile status/preflight/live/pause/resume/flatten komutlarını ayır.
 - [x] `/desk` komutunu yalnızca manuel explain/inspect işine indir.
 
 Kabul: watchdog hiçbir koşulda buy, yeni grid veya exposure artışı üretemez.

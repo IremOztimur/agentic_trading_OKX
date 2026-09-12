@@ -21,14 +21,16 @@ def age(value: str | None) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("status", "live", "pause", "resume", "flatten"))
+    parser.add_argument("command", choices=("status", "preflight", "live", "pause", "resume", "flatten"))
     parser.add_argument("confirmation", nargs="?")
     args = parser.parse_args()
     state = load_state()
     if args.command == "status":
         print(json.dumps({"mode": state["session"]["mode"], "health": state["session"]["health"], "watchdog": state["watchdog"]}, ensure_ascii=False, indent=2))
         return 0
-    if args.command == "live":
+    if args.command == "preflight":
+        patch, message = {"session": {"private_preflight_requested": True}}, "Custom MCP private preflight runner kuyruğuna alındı"
+    elif args.command == "live":
         health = state["session"]["health"]
         if args.confirmation != "CANLI":
             raise SystemExit("LIVE için tam olarak CANLI yazılmalı")

@@ -40,6 +40,11 @@ class RunnerTests(unittest.TestCase):
         proposal = {"run_id": "shock-1", "action": "REDUCE", "candidate_action": "REDUCE", "regime": "SHOCK", "rationale_tr": "Şok."}
         self.assertEqual(self.run_cycle(proposal), [("emergency", "shock-1")])
 
+    def test_private_preflight_requires_verified_nav(self):
+        subject = TestRunner()
+        with self.assertRaises(ValueError):
+            subject.apply_private_account({"account": {"nav": 0, "available_usdt": 0}})
+
 
 if __name__ == "__main__":
     unittest.main()

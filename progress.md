@@ -42,3 +42,11 @@
 - Smart Money custom MCP ile doğrulanana kadar veto artık kesin olarak `true`; yeni risk fail-closed.
 - 36 unit/contract/replay testi ve strict JSON doğrulaması geçiyor.
 - Event-triggered gerçek candidate çağrısı ve 30 dakikalık DRY_RUN soak henüz tamamlanmadı.
+
+## Private preflight aşaması
+
+- `control.py preflight` komutu eklendi; istek state üzerinden çalışan runner'a iletiliyor.
+- Runner bu istekte Claude'u yalnızca bağlı custom MCP read araçlarıyla çağırıyor ve account freshness'i state'e yansıtıyor.
+- Smart Money verisi yokken gösterilen `VETO`, dashboard'da `BEKLENİYOR`; teknik aday yokken `NOT CHECKED` olarak ayrıştırıldı.
+- Her yeni proposal gate/run kimliği ve expiry alanlarını sıfırlıyor; eski gate zamanı yeni kararla karışmıyor.
+- Gerçek private preflight, çalışan runner yeni kodla yeniden başlatıldıktan sonra doğrulanacak.

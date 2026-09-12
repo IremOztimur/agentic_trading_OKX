@@ -110,7 +110,8 @@ class Runner:
         symbols, proposal = classify_state(load_state())
         if shock_only and proposal.get("regime") != "SHOCK":
             return None
-        merge_state({"symbols": symbols, "cycle": {"run_id": proposal["run_id"], "proposal": proposal, "gate": {"verdict": "HOLD", "allowed_notional_usdt": 0, "reason_codes": ["AGENT_CONTEXT_PENDING"]}, "execution": {"status": "NOT_SENT", "tool": None, "client_order_id": None, "order_id": None}}})
+        reason = "AGENT_CONTEXT_PENDING" if proposal.get("candidate_action") in ENTRY_ACTIONS else "NO_ACTION"
+        merge_state({"symbols": symbols, "cycle": {"run_id": proposal["run_id"], "proposal": proposal, "gate": {"run_id": proposal["run_id"], "verdict": "HOLD", "allowed_notional_usdt": 0, "reason_codes": [reason], "checked_at": None, "expires_at": proposal.get("expires_at"), "approved_call": None}, "execution": {"run_id": proposal["run_id"], "status": "NOT_SENT", "tool": None, "client_order_id": None, "order_id": None}}})
         append_event("DECISION", "WARN" if proposal.get("regime") == "SHOCK" else "INFO", proposal.get("rationale_tr", "Deterministik karar"), {"source": "DETERMINISTIC", "symbol": proposal.get("symbol"), "regime": proposal.get("regime"), "action": proposal.get("action")}, proposal["run_id"])
         return proposal
 
@@ -138,7 +139,39 @@ class Runner:
         append_event("SYSTEM", "INFO", "Claude custom MCP görevi tamamlandı", {"event": event, "run_id": run_id, "latency_ms": round((time.monotonic() - started) * 1000)}, run_id)
         return True
 
+    def apply_private_account(self, result: dict) -> None:
+        account = result.get("account") or {}
+        nav = number(account.get("nav"))
+        available = number(account.get("available_usdt"))
+        if nav <= 0:
+            raise ValueError("custom MCP account NAV doğrulanamadı")
+        state = load_state()
+        now = utc_now()
+        starting_nav = state.get("session", {}).get("starting_nav") or nav
+        merge_state({
+            "session": {"health": {"mcp": "READY", "account": "READY"}},
+            "account": {
+                "nav": nav,
+                "available_usdt": available,
+                "drawdown_pct": nav / starting_nav - 1 if starting_nav else 0,
+                "account_observed_at": now,
+                "account_age_seconds": 0,
+                "total_exposure_usdt": number(account.get("total_exposure_usdt")),
+                "positions": account.get("positions", state.get("account", {}).get("positions", [])),
+                "open_orders": account.get("open_orders", state.get("account", {}).get("open_orders", [])),
+                "recent_fills": account.get("recent_fills", state.get("account", {}).get("recent_fills", [])),
+            },
+        })
+        refreshed = load_state()
+        health = refreshed["session"]["health"]
+        health["trade_ready"] = all(health.get(key) == "READY" for key in ("mcp", "account", "market", "watchdog"))
+        merge_state({"session": {"health": health}})
+        append_event("MCP_READ", "INFO", "Custom MCP private account preflight tamamlandı", {"provider": "CLAUDE_CUSTOM_MCP", "nav": nav, "available_usdt": available})
+
     def apply_agent_result(self, event: str, run_id: str | None, result: dict) -> None:
+        if event == "preflight":
+            self.apply_private_account(result)
+            return
         if event != "candidate":
             append_event("DECISION", "WARN", "Emergency context custom MCP ile değerlendirildi", {"reason_codes": result.get("reason_codes", []), "rationale_tr": result.get("rationale_tr")}, run_id)
             return
@@ -146,13 +179,7 @@ class Runner:
         proposal = state.get("cycle", {}).get("proposal") or {}
         if not run_id or proposal.get("run_id") != run_id or result.get("candidate_id") != run_id:
             raise ValueError("candidate_id güncel state ile eşleşmiyor")
-        account = result.get("account") or {}
-        nav = number(account.get("nav"))
-        available = number(account.get("available_usdt"))
-        if nav <= 0:
-            raise ValueError("custom MCP account NAV doğrulanamadı")
-        now = utc_now()
-        starting_nav = state.get("session", {}).get("starting_nav") or nav
+        self.apply_private_account(result)
         approved = bool(result.get("approve")) and not bool(result.get("smart_money_veto"))
         proposal = {
             **proposal,
@@ -161,18 +188,11 @@ class Runner:
             "rationale_tr": result.get("rationale_tr") or "Agent bağlam değerlendirmesi tamamlandı.",
             "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=90)).isoformat(),
         }
-        merge_state({
-            "session": {"health": {"mcp": "READY", "account": "READY"}},
-            "account": {"nav": nav, "available_usdt": available, "drawdown_pct": nav / starting_nav - 1 if starting_nav else 0, "account_observed_at": now, "account_age_seconds": 0, "positions": account.get("positions", state.get("account", {}).get("positions", []))},
-            "cycle": {"proposal": proposal},
-        })
-        refreshed = load_state()
-        refreshed["session"]["health"]["trade_ready"] = all(refreshed["session"]["health"].get(key) == "READY" for key in ("mcp", "account", "market", "watchdog"))
-        merge_state({"session": {"health": refreshed["session"]["health"]}})
+        merge_state({"cycle": {"proposal": proposal}})
         gate = evaluate_risk(load_state())
         if load_state()["session"]["mode"] == "LIVE" and gate["verdict"] == "ALLOW":
             gate = {**gate, "verdict": "HOLD", "allowed_notional_usdt": 0, "reason_codes": ["LIVE_EXECUTOR_NOT_ENABLED"], "approved_call": None}
-        merge_state({"cycle": {"gate": gate, "execution": {"status": "SIMULATED" if gate["verdict"] == "ALLOW" else "NOT_SENT", "tool": None, "client_order_id": None, "order_id": None}}})
+        merge_state({"cycle": {"gate": gate, "execution": {"run_id": run_id, "status": "SIMULATED" if gate["verdict"] == "ALLOW" else "NOT_SENT", "tool": None, "client_order_id": None, "order_id": None}}})
         append_event("GATE", "INFO", f"Agent sonrası risk gate: {gate['verdict']}", {"reason_codes": gate["reason_codes"], "allowed_notional_usdt": gate["allowed_notional_usdt"]}, run_id)
 
     def decision_cycle(self) -> None:
@@ -199,6 +219,12 @@ class Runner:
             self.trigger_agent("emergency", watchdog["reason"])
         if state.get("session", {}).get("flatten_requested"):
             self.trigger_agent("emergency", "USER_FLATTEN")
+        if state.get("session", {}).get("private_preflight_requested"):
+            success = self.trigger_agent("preflight")
+            patch = {"session": {"private_preflight_requested": False}}
+            if not success:
+                patch["session"]["health"] = {"mcp": "ERROR", "account": "STALE", "trade_ready": False}
+            merge_state(patch)
 
     @staticmethod
     def age(value: str | None, now: datetime) -> float | None:
