@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "updated_at": "2099-01-01T00:00:00+00:00",
+  "session": {
+    "id": "test",
+    "mode": "LIVE",
+    "heartbeat_at": "2099-01-01T00:00:00+00:00",
+    "starting_nav": 10000,
+    "starting_inventory": {"BTC": 0.01},
+    "health": {"mcp": "READY", "account": "READY", "market": "READY", "watchdog": "READY", "trade_ready": true}
+  },
+  "account": {
+    "nav": 10000,
+    "available_usdt": 8000,
+    "drawdown_pct": 0,
+    "account_age_seconds": 2,
+    "total_exposure_usdt": 1000,
+    "positions": [{"symbol": "BTC-USDT", "exposure_usdt": 1000, "base_amount": 0.02}]
+  },
+  "observation_symbols": [],
+  "symbols": [],
+  "cycle": {
+    "run_id": "run-1",
+    "proposal": {
+      "run_id": "run-1",
+      "symbol": "ETH-USDT",
+      "action": "BUY_BREAKOUT",
+      "confidence": 0.8,
+      "requested_notional_usdt": 1000,
+      "stop_distance_pct": 0.01,
+      "market_age_seconds": 2,
+      "smart_money_veto": false,
+      "expires_at": "2099-01-01T00:05:00+00:00",
+      "mcp_call": {
+        "tool": "mcp__claude_ai_okx-agent-trade-kit__spot_place_order",
+        "arguments": {"instId": "ETH-USDT", "side": "buy", "ordType": "market", "quoteSz": "1000", "clOrdId": "rd-run-1"}
+      }
+    },
+    "gate": {"verdict": "HOLD", "allowed_notional_usdt": 0, "reason_codes": ["NOT_EVALUATED"]},
+    "execution": {"status": "NOT_SENT", "tool": null, "client_order_id": null, "order_id": null}
+  },
+  "watchdog": {"status": "READY", "last_check_at": "2099-01-01T00:00:00+00:00", "last_action": null},
+  "recent_events": []
+}

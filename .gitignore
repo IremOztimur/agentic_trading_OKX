@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+run/
+static/data/dashboard.json
+tests/logs/
+.claude/settings.local.json
+.pytest_cache/
+.coverage
+.DS_Store

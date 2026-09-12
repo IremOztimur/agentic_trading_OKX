@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Regime Desk OKX spot trading agent monitorü">
+  <title>Regime Desk</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Ana içeriğe geç</a>
+  <header class="masthead"><div class="masthead-inner">
+    <div><p class="product-mark">REGIME DESK / OKX SPOT</p><p class="product-note">Agent decision monitor</p></div>
+    <div class="mode-block" aria-live="polite"><span>SESSION MODE</span><strong id="mode">—</strong></div>
+  </div></header>
+  <main id="main" class="shell">
+    <section class="intro"><div><p class="eyebrow">CURRENT DESK STATE</p><h1>Karar, risk ve execution aynı yerde.</h1></div><p id="summary" class="lead">State verisi bekleniyor.</p></section>
+    <section id="healthNotice" class="notice" aria-live="polite">Gerçek hesap ve market preflight tamamlanmadı. LIVE kapalı.</section>
+    <section class="status-strip" aria-label="Sistem durumu">
+      <div><span>MCP</span><strong id="mcpHealth">—</strong></div><div><span>ACCOUNT</span><strong id="accountHealth">—</strong></div><div><span>MARKET</span><strong id="marketHealth">—</strong></div><div><span>WATCHDOG</span><strong id="watchdogHealth">—</strong></div><div><span>HEARTBEAT</span><strong id="heartbeat">—</strong></div>
+    </section>
+    <section class="section">
+      <div class="section-title"><div><p class="eyebrow">ACCOUNT</p><h2>Portföy ve risk</h2></div><p id="sessionId" class="section-meta">Session —</p></div>
+      <div class="metrics"><div><span>Güncel NAV</span><strong id="nav">—</strong><small id="startNav">Başlangıç —</small></div><div><span>Kullanılabilir USDT</span><strong id="available">—</strong><small>Yeni risk kapasitesi</small></div><div><span>Toplam exposure</span><strong id="exposure">—</strong><small id="exposurePct">NAV’ın —</small></div><div><span>Günlük drawdown</span><strong id="drawdown">—</strong><small>Soft −3% / Hard −5%</small></div></div>
+      <div class="meter-row"><label for="exposureMeter">Toplam exposure / %50 hard limit</label><progress id="exposureMeter" max="50" value="0">0%</progress></div>
+    </section>
+    <section class="section">
+      <div class="section-title"><div><p class="eyebrow">OBSERVATION</p><h2>RANGE / TREND / SHOCK</h2></div><p class="section-meta">BTC / ETH / SOL · Spot only</p></div>
+      <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Regime</th><th>Direction</th><th>Confidence</th><th>Price</th><th>ADX</th><th>Volume Z</th><th>OI 5m</th><th>Smart Money</th><th>Action</th></tr></thead><tbody id="marketRows"><tr><td colspan="10" class="empty">Henüz market snapshot yok.</td></tr></tbody></table></div>
+    </section>
+    <section class="section">
+      <div class="section-title"><div><p class="eyebrow">DECISION TRACE</p><h2>Observation → Proposal → Gate → Execution</h2></div><p id="runId" class="section-meta">Run —</p></div>
+      <div class="decision-grid">
+        <div><span>PROPOSAL</span><strong id="proposalAction">HOLD</strong><dl><div><dt>Symbol</dt><dd id="proposalSymbol">—</dd></div><div><dt>Regime</dt><dd id="proposalRegime">—</dd></div><div><dt>İstenen</dt><dd id="requestedNotional">—</dd></div><div><dt>Veto</dt><dd id="veto">—</dd></div></dl><p id="rationale">Henüz karar yok.</p></div>
+        <div class="gate"><span>RISK GATE</span><strong id="gateVerdict">HOLD</strong><dl><div><dt>İzin verilen</dt><dd id="allowedNotional">—</dd></div><div><dt>Reason codes</dt><dd id="reasonCodes">NOT_EVALUATED</dd></div><div><dt>Expires</dt><dd id="expiresAt">—</dd></div></dl></div>
+        <div><span>EXECUTION</span><strong id="executionStatus">NOT_SENT</strong><dl><div><dt>Tool</dt><dd id="executionTool">—</dd></div><div><dt>Client ID</dt><dd id="clientOrderId">—</dd></div><div><dt>Order ID</dt><dd id="orderId">—</dd></div></dl></div>
+      </div>
+    </section>
+    <section class="split">
+      <div class="section compact"><div class="section-title"><div><p class="eyebrow">INVENTORY</p><h2>Pozisyonlar</h2></div></div><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Amount</th><th>Exposure</th><th>Owner</th></tr></thead><tbody id="positionRows"><tr><td colspan="4" class="empty">Açık pozisyon yok.</td></tr></tbody></table></div></div>
+      <div class="section compact"><div class="section-title"><div><p class="eyebrow">TERMINAL-OWNED</p><h2>Operasyon komutları</h2></div></div><div class="commands"><button data-command="/desk once"><code>/desk once</code><span>Kopyala</span></button><button data-command="/desk pause"><code>/desk pause</code><span>Kopyala</span></button><button data-command="/desk live CANLI"><code>/desk live CANLI</code><span>Kopyala</span></button><button data-command="/desk flatten FLATTEN"><code>/desk flatten FLATTEN</code><span>Kopyala</span></button></div><p class="helper">Panel emir göndermez. Operasyonlar Claude Code ve deterministic gate üzerinden yürür.</p></div>
+    </section>
+    <section class="section"><div class="section-title"><div><p class="eyebrow">AUDIT</p><h2>Son olaylar</h2></div><p class="section-meta">Tek append-only event log</p></div><div class="table-wrap"><table><thead><tr><th>Zaman</th><th>Type</th><th>Level</th><th>Run</th><th>Mesaj</th></tr></thead><tbody id="eventRows"><tr><td colspan="5" class="empty">Henüz kayıt yok.</td></tr></tbody></table></div></section>
+    <section class="risk-policy"><div><p class="eyebrow">IMMUTABLE POLICY</p><h2>Risk limitleri</h2></div><dl><div><dt>Trade risk</dt><dd>0.35% NAV</dd></div><div><dt>Coin cap</dt><dd>25% NAV</dd></div><div><dt>Total cap</dt><dd>50% NAV</dd></div><div><dt>Soft / hard DD</dt><dd>−3% / −5%</dd></div><div><dt>Safe close</dt><dd>19:20 İstanbul</dd></div></dl></section>
+  </main>
+  <footer><span>Regime Desk</span><span id="updatedAt">Updated —</span></footer><div id="copyStatus" class="sr-only" aria-live="polite"></div><script src="app.js" defer></script>
+</body></html>
+
