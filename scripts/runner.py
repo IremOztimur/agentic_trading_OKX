@@ -7,6 +7,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -27,6 +28,7 @@ OI_SECONDS = 300
 AGENT_TIMEOUT_SECONDS = 180
 ENTRY_ACTIONS = {"OPEN_GRID", "BUY_BREAKOUT"}
 RUNNER_LOCK = "/tmp/regime-desk-runner.lock"
+DEFAULT_AGENT_COMMAND = "claude -p --output-format json --permission-mode dontAsk --allowedTools 'Skill,Read,mcp__claude_ai_okx-agent-trade-kit__*_get_*' --no-session-persistence"
 
 
 def first(payload: list[object]) -> dict:
@@ -40,10 +42,29 @@ def number(value: object) -> float:
         return 0.0
 
 
+def parse_agent_output(stdout: str) -> dict:
+    envelope = json.loads(stdout)
+    raw = envelope.get("structured_output") or envelope.get("result", envelope) if isinstance(envelope, dict) else envelope
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        raise ValueError("agent sonucu JSON object değil")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL | re.IGNORECASE)
+        if not fenced:
+            raise
+        parsed = json.loads(fenced.group(1))
+    if not isinstance(parsed, dict):
+        raise ValueError("agent sonucu JSON object değil")
+    return parsed
+
+
 class Runner:
     def __init__(self, market: PublicMarketClient | None = None, agent_command: str | None = None) -> None:
         self.market = market or PublicMarketClient()
-        self.agent_command = agent_command or os.environ.get("REGIME_DESK_AGENT_COMMAND", "claude -p --output-format json")
+        self.agent_command = agent_command or os.environ.get("REGIME_DESK_AGENT_COMMAND", DEFAULT_AGENT_COMMAND)
         self.last_fast = self.last_regime = self.last_oi = 0.0
         self.last_agent_event: str | None = None
 
@@ -117,7 +138,7 @@ class Runner:
 
     def trigger_agent(self, event: str, run_id: str | None = None) -> bool:
         event_key = f"{event}:{run_id or ''}"
-        if event_key == self.last_agent_event:
+        if event != "preflight" and event_key == self.last_agent_event:
             return False
         prompt = f"/desk {event} {run_id or ''}".strip()
         started = time.monotonic()
@@ -127,22 +148,20 @@ class Runner:
             append_event("SYSTEM", "ERROR", "Claude custom MCP görevi başarısız; fail-closed", {"event": event, "run_id": run_id, "error": (completed.stderr or completed.stdout)[:500]}, run_id)
             return False
         try:
-            envelope = json.loads(completed.stdout)
-            raw = envelope.get("result", envelope) if isinstance(envelope, dict) else envelope
-            result = json.loads(raw) if isinstance(raw, str) else raw
-            if not isinstance(result, dict):
-                raise ValueError("agent sonucu JSON object değil")
+            result = parse_agent_output(completed.stdout)
             self.apply_agent_result(event, run_id, result)
         except Exception as exc:
-            append_event("SYSTEM", "ERROR", "Claude sonucu geçersiz; fail-closed", {"event": event, "run_id": run_id, "error": str(exc)[:300]}, run_id)
+            append_event("SYSTEM", "ERROR", "Claude sonucu geçersiz; fail-closed", {"event": event, "run_id": run_id, "error": str(exc)[:300], "stdout": completed.stdout[:500], "stderr": completed.stderr[:500]}, run_id)
             return False
         append_event("SYSTEM", "INFO", "Claude custom MCP görevi tamamlandı", {"event": event, "run_id": run_id, "latency_ms": round((time.monotonic() - started) * 1000)}, run_id)
         return True
 
     def apply_private_account(self, result: dict) -> None:
         account = result.get("account") or {}
-        nav = number(account.get("nav"))
-        available = number(account.get("available_usdt"))
+        nav = number(account.get("nav") or account.get("totalEqUsd"))
+        balances = account.get("balances") or []
+        usdt = next((item for item in balances if isinstance(item, dict) and item.get("ccy") == "USDT"), {})
+        available = number(account.get("available_usdt") or usdt.get("availBal"))
         if nav <= 0:
             raise ValueError("custom MCP account NAV doğrulanamadı")
         state = load_state()
@@ -200,7 +219,7 @@ class Runner:
         proposal = self.classify()
         if proposal and proposal.get("candidate_action") in ENTRY_ACTIONS:
             self.trigger_agent("candidate", proposal["run_id"])
-        elif proposal and proposal.get("regime") == "SHOCK":
+        elif proposal and proposal.get("regime") == "SHOCK" and load_state().get("session", {}).get("mode") == "LIVE":
             self.trigger_agent("emergency", proposal["run_id"])
 
     def heartbeat(self) -> None:
@@ -266,7 +285,7 @@ class Runner:
                 if now - self.last_fast >= FAST_MARKET_SECONDS:
                     self.refresh_fast_market()
                     shock = self.classify(shock_only=True)
-                    if shock:
+                    if shock and load_state().get("session", {}).get("mode") == "LIVE":
                         self.trigger_agent("emergency", shock["run_id"])
                     self.last_fast = now
                 if now - self.last_oi >= OI_SECONDS:

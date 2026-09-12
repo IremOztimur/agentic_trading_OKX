@@ -11,4 +11,4 @@ Gerçek loop'un sahibi `scripts/runner.py` sürecidir.
 - `candidate RUN_ID`: state'teki run ID birebir eşleşmiyorsa veto et. Bağlı custom MCP ile canlı sub-account balance, güncel ticker, Smart Money ve news/context verisini oku. Teknik aday veya gerekli bağlam eksik/stale/ters ise veto et.
 - `emergency REASON`: custom MCP ile açık spot emir, grid ve agent-owned inventory durumunu salt-okunur değerlendir; risk azaltma önerisini döndür.
 
-Her durumda yalnızca JSON sonuç döndür. Dosya değiştirme ve MCP write yapma. Beklenen alanlar: `candidate_id`, `approve`, `context_risk`, `reason_codes`, `rationale_tr`, `smart_money_veto`, `account` ve `freshness`.
+Her durumda markdown veya code fence olmadan yalnızca JSON object döndür. Bash kullanma, dosya değiştirme ve MCP write yapma. Beklenen alanlar: `candidate_id`, `approve`, `context_risk`, `reason_codes`, `rationale_tr`, `smart_money_veto`, `account` ve `freshness`. `account` içinde sayısal `nav`, `available_usdt`, `total_exposure_usdt` ile `positions`, `open_orders`, `recent_fills` listeleri bulunmalı.

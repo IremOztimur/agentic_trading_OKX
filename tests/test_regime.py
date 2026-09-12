@@ -49,6 +49,11 @@ class RegimeTests(unittest.TestCase):
         self.assertEqual(result["candidate_streak"], 1)
         self.assertEqual(result["last_action"], "REDUCE")
 
+    def test_five_minute_return_uses_five_minute_atr_scale(self):
+        item = base(atr_pct=0.00025903, return_5m=-0.0006856)
+        result = regime.classify_symbol(item)
+        self.assertNotEqual(result["candidate_regime"], "SHOCK")
+
     def test_only_one_grid_candidate_survives(self):
         a = regime.classify_symbol(base(), regime.classify_symbol(base()))
         b_raw = base()

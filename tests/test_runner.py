@@ -1,4 +1,5 @@
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 import sys
@@ -19,6 +20,10 @@ class TestRunner(runner.Runner):
 
 
 class RunnerTests(unittest.TestCase):
+    def test_parses_claude_json_envelope_and_fenced_result(self):
+        output = json.dumps({"result": "Preflight tamamlandı.\n```json\n{\"approve\": true}\n```"})
+        self.assertEqual(runner.parse_agent_output(output), {"approve": True})
+
     def test_missing_timestamp_has_no_json_infinity(self):
         self.assertIsNone(TestRunner.age(None, __import__("datetime").datetime.now(__import__("datetime").timezone.utc)))
 
@@ -36,9 +41,9 @@ class RunnerTests(unittest.TestCase):
         proposal = {"run_id": "trend-1", "action": "HOLD", "candidate_action": "BUY_BREAKOUT", "regime": "TREND", "rationale_tr": "Aday."}
         self.assertEqual(self.run_cycle(proposal), [("candidate", "trend-1")])
 
-    def test_shock_calls_emergency_not_candidate(self):
+    def test_dry_run_shock_does_not_call_agent_without_live_risk(self):
         proposal = {"run_id": "shock-1", "action": "REDUCE", "candidate_action": "REDUCE", "regime": "SHOCK", "rationale_tr": "Şok."}
-        self.assertEqual(self.run_cycle(proposal), [("emergency", "shock-1")])
+        self.assertEqual(self.run_cycle(proposal), [])
 
     def test_private_preflight_requires_verified_nav(self):
         subject = TestRunner()

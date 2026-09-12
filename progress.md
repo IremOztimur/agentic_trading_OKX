@@ -50,3 +50,12 @@
 - Smart Money verisi yokken gösterilen `VETO`, dashboard'da `BEKLENİYOR`; teknik aday yokken `NOT CHECKED` olarak ayrıştırıldı.
 - Her yeni proposal gate/run kimliği ve expiry alanlarını sıfırlıyor; eski gate zamanı yeni kararla karışmıyor.
 - Gerçek private preflight, çalışan runner yeni kodla yeniden başlatıldıktan sonra doğrulanacak.
+
+## Headless Claude/MCP teşhisi
+
+- İlk hata custom MCP bağlantısı değil, headless `/desk` çağrısında `Skill` izninin bulunmaması ve Claude'un JSON'u markdown fence içinde döndürmesiydi.
+- Read-only `Skill, Read, *_get_*` allowlist'iyle doğrudan preflight başarılı: 30 USDT, yaklaşık 29.9928 USD equity, sıfır açık spot emir, sıfır aktif grid ve sıfır recent fill doğrulandı.
+- Runner varsayılan Claude komutuna explicit read-only allowlist ve fenced-JSON parser eklendi; stdout/stderr hata ayrıntıları audit'e ekleniyor.
+- 1m ATR ile 5m return doğrudan karşılaştırılmasından doğan yanlış SHOCK, `sqrt(5)` zaman ölçeğiyle düzeltildi.
+- DRY_RUN ve sıfır pozisyonda SHOCK artık Claude emergency çağrısı üretmiyor.
+- 39 unit/contract/replay testi geçiyor.

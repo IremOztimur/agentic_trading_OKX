@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -40,7 +41,9 @@ def classify_symbol(item: dict[str, Any], previous: dict[str, Any] | None = None
     negative_news = bool((item.get("news") or {}).get("high_impact_negative"))
     exposure = number(item.get("exposure_usdt"))
 
-    shock = return_5m >= 2.5 * atr or volume_z >= 3 or spread_multiple >= 3 or liquidity_drop >= 0.5 or negative_news
+    # ATR is computed from 1m candles; scale it to the 5m return horizon.
+    price_shock = return_5m >= 2.5 * atr * math.sqrt(5)
+    shock = price_shock or volume_z >= 3 or spread_multiple >= 3 or liquidity_drop >= 0.5 or negative_news
     range_ready = adx <= 20 and separation_atr <= 0.5 and crosses >= 3 and spread_multiple < 3
     trend_up = adx >= 25 and ema20 > ema50 and bool(features.get("breakout_20")) and volume_z >= 1 and orderflow > 0
     trend_down = adx >= 25 and ema20 < ema50 and bool(features.get("breakdown_20")) and volume_z >= 1 and orderflow < 0
@@ -64,7 +67,7 @@ def classify_symbol(item: dict[str, Any], previous: dict[str, Any] | None = None
     rationale = "Rejim görünür, fakat giriş koşulları birlikte doğrulanmadı."
     if candidate == "SHOCK":
         technical_action = "REDUCE" if exposure > 0 else "HOLD"
-        rationale = "SHOCK önceliği etkin; yeni risk yok, açık agent inventory azaltılır."
+        rationale = "SHOCK önceliği etkin; yeni risk yok, açık agent inventory azaltılır." if exposure > 0 else "SHOCK önceliği etkin; açık pozisyon olmadığı için işlem yapılmaz."
     elif streak < 2:
         rationale = f"{candidate} adayı ilk kez görüldü; rejim değişimi için ikinci ardışık karar bekleniyor."
     elif candidate == "RANGE" and range_ready and confidence >= CONFIDENCE_FLOOR:
@@ -85,7 +88,13 @@ def classify_symbol(item: dict[str, Any], previous: dict[str, Any] | None = None
         rationale = "Teknik aday oluştu; güncel Smart Money bağlamı için agent checkpoint bekleniyor."
 
     result = dict(item)
-    result.update(regime=regime, candidate_regime=candidate, candidate_streak=streak, direction=direction, confidence=round(confidence, 4), technical_action=technical_action, last_action=action, rationale_tr=rationale)
+    shock_reasons = []
+    if price_shock: shock_reasons.append("FIVE_MINUTE_RETURN")
+    if volume_z >= 3: shock_reasons.append("VOLUME_SPIKE")
+    if spread_multiple >= 3: shock_reasons.append("SPREAD_SPIKE")
+    if liquidity_drop >= 0.5: shock_reasons.append("LIQUIDITY_DROP")
+    if negative_news: shock_reasons.append("NEGATIVE_NEWS")
+    result.update(regime=regime, candidate_regime=candidate, candidate_streak=streak, direction=direction, confidence=round(confidence, 4), technical_action=technical_action, last_action=action, rationale_tr=rationale, shock_reasons=shock_reasons)
     return result
 
 
