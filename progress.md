@@ -21,6 +21,19 @@
 ## Canlı MCP preflight
 
 - `simulatedTrading=false` ile account config, balance, BTC/ETH/SOL instrument ve ticker read çağrıları başarılı.
-- Canlı hesap NAV ve kullanılabilir USDT `0`; başlangıç BTC/ETH/SOL inventory boş.
+- OAuth bağlantısı doğru yarışma sub-account'ına yönlendirildi; `30 USDT` available ve yaklaşık `29.9922 USD` NAV doğrulandı.
 - Açık spot emir ve aktif grid bulunmuyor.
-- Write smoke limiti `min(10 USDT, NAV × %0.1) = 0` olduğu için test `SKIPPED_NO_FUNDS`; hiçbir write çağrısı yapılmadı.
+- Hiçbir canlı write çağrısı yapılmadı.
+
+## Event-driven runner refactor
+
+- Mimari niyeti `intent.md`, kabul sırası `implementation_plan.md` içinde sabitlendi.
+- Claude `/loop` otomasyon yolundan çıkarıldı; `/desk` salt-okunur inspect/explain komutuna indirildi.
+- Tek-process `runner.py`, ayrı `control.py`, OAuth destekli `mcp_client.py` ve yerel feature motoru eklendi.
+- 10s heartbeat, 15s hızlı market, 30s account, 2m regime ve 5m context cadence tanımlandı.
+- MCP endpoint pacing, read 429 backoff ve belirsiz write sonrası lookup/no-blind-retry eklendi.
+- Claude çıktısı APPROVE/VETO ile sınırlandı; tool, input ve notional sahipliği runner/gate katmanına taşındı.
+- Risk gate'e trade-ready, timestamp freshness, 19:20 safe-close ve agent-owned inventory sınırı eklendi.
+- 29 unit/contract/replay testi geçiyor.
+- Runner'ın ayrı OAuth oturumu, gerçek custom MCP preflight ve 30 dakikalık DRY_RUN soak henüz tamamlanmadı.
+- İlk runner OAuth denemesi sessiz transport nedeniyle kullanıcı yetkilendirmesi tamamlanmadan initialize timeout oldu; hiçbir MCP read/write yapılmadı. Terminalde URL gösteren üç dakikalık auth akışı hazırlandı.

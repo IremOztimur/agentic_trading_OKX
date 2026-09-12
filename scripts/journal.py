@@ -39,9 +39,10 @@ def default_state() -> dict[str, Any]:
             "heartbeat_at": now,
             "starting_nav": None,
             "starting_inventory": {},
+            "flatten_requested": False,
             "health": {"mcp": "UNKNOWN", "account": "UNKNOWN", "market": "UNKNOWN", "watchdog": "UNKNOWN", "trade_ready": False},
         },
-        "account": {"nav": None, "available_usdt": None, "drawdown_pct": 0.0, "account_age_seconds": None, "total_exposure_usdt": 0.0, "positions": []},
+        "account": {"nav": None, "available_usdt": None, "drawdown_pct": 0.0, "account_observed_at": None, "account_age_seconds": None, "total_exposure_usdt": 0.0, "positions": [], "open_orders": [], "recent_fills": []},
         "observation_symbols": [],
         "symbols": [],
         "cycle": {

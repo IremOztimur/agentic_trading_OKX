@@ -59,7 +59,17 @@ class RegimeTests(unittest.TestCase):
         self.assertEqual(sum(item["last_action"] == "OPEN_GRID" for item in symbols), 1)
         self.assertEqual(proposal["action"], "OPEN_GRID")
 
+    def test_shock_suppresses_entry_on_other_symbol(self):
+        shock = base(volume_zscore=3.5)
+        trend = base(adx=35, ema20=110, ema50=100, volume_zscore=2, orderflow=.5, breakout_20=True)
+        trend["symbol"] = "ETH-USDT"
+        previous_trend = regime.classify_symbol(trend)
+        state = {"account": {"nav": 10000}, "symbols": [previous_trend], "observation_symbols": [shock, trend]}
+        _, proposal = regime.classify_state(state, datetime(2026, 1, 1, tzinfo=timezone.utc))
+        self.assertEqual(proposal["symbol"], "BTC-USDT")
+        self.assertEqual(proposal["regime"], "SHOCK")
+        self.assertEqual(proposal["action"], "HOLD")
+
 
 if __name__ == "__main__":
     unittest.main()
-

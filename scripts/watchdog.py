@@ -44,11 +44,13 @@ def evaluate(state: dict, now: datetime | None = None) -> dict:
     mode = state.get("session", {}).get("mode", "DISCONNECTED")
     drawdown = float(state.get("account", {}).get("drawdown_pct") or 0)
     heartbeat_age = age_seconds(state.get("session", {}).get("heartbeat_at"), now)
+    flatten_requested = bool(state.get("session", {}).get("flatten_requested"))
     result = {"status": "READY", "mode": mode, "reason": None, "actions": [], "checked_at": now.isoformat()}
 
     hard_stop = drawdown <= HARD_DRAWDOWN or (local.hour, local.minute) >= (19, 20)
-    if mode == "LIVE" and hard_stop:
-        result.update(status="HALT_REQUIRED", mode="HALTED", reason="HARD_DRAWDOWN" if drawdown <= HARD_DRAWDOWN else "SAFE_CLOSE")
+    if flatten_requested or (mode == "LIVE" and hard_stop):
+        reason = "USER_FLATTEN" if flatten_requested else ("HARD_DRAWDOWN" if drawdown <= HARD_DRAWDOWN else "SAFE_CLOSE")
+        result.update(status="HALT_REQUIRED", mode="HALTED", reason=reason)
         result["actions"] = [{"action": "CANCEL_ENTRY_ORDERS"}, {"action": "STOP_GRIDS"}, *agent_inventory(state)]
     elif mode == "LIVE" and heartbeat_age > HEARTBEAT_STALE_SECONDS:
         result.update(status="PAUSE_REQUIRED", mode="PAUSED", reason="STALE_HEARTBEAT")
@@ -69,4 +71,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

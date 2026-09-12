@@ -101,7 +101,7 @@ def classify_state(state: dict[str, Any], now: datetime | None = None) -> tuple[
                 item["rationale_tr"] = f"Tek-grid kuralında {winner} daha yüksek confidence aldığı için HOLD."
 
     priority = {"REDUCE": 3, "BUY_BREAKOUT": 2, "OPEN_GRID": 1, "HOLD": 0}
-    selected = max(symbols, key=lambda item: (priority[item["last_action"]], item["confidence"]), default=None)
+    selected = max(symbols, key=lambda item: (4 if item.get("candidate_regime") == "SHOCK" else priority[item["last_action"]], item["confidence"]), default=None)
     run_id = f"{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
     if not selected:
         proposal = {"run_id": run_id, "action": "HOLD", "requested_notional_usdt": 0, "rationale_tr": "Geçerli observation yok."}
@@ -114,6 +114,7 @@ def classify_state(state: dict[str, Any], now: datetime | None = None) -> tuple[
         proposal = {
             "run_id": run_id,
             "symbol": selected["symbol"],
+            "price": selected.get("price"),
             "regime": selected["regime"],
             "direction": selected["direction"],
             "confidence": selected["confidence"],
@@ -121,7 +122,14 @@ def classify_state(state: dict[str, Any], now: datetime | None = None) -> tuple[
             "requested_notional_usdt": round(requested, 8),
             "stop_distance_pct": max(0.01, number(selected.get("features", {}).get("atr_pct")) * 1.5),
             "market_age_seconds": number(selected.get("market_age_seconds"), 9999),
+            "market_observed_at": selected.get("market_observed_at"),
             "smart_money_veto": bool(selected.get("smart_money_veto")),
+            "evidence": {
+                "price_volume": selected.get("features", {}),
+                "open_interest": selected.get("open_interest", {}),
+                "smart_money": selected.get("smart_money", {}),
+                "news": selected.get("news", {}),
+            },
             "rationale_tr": selected["rationale_tr"],
             "expires_at": (now + timedelta(seconds=90)).isoformat(),
         }
@@ -139,4 +147,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
