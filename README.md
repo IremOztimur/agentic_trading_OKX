@@ -86,7 +86,7 @@ the ATK child process; no OAuth and no `~/.okx/config.toml` are required.
 ```bash
 python3 scripts/runner.py run            # terminal 1 — the trading engine
 ./init.sh                                # terminal 2 — dashboard on :8765
-python3 scripts/hq.py                    # terminal 3 — Telegram HQ (optional)
+uvicorn api:app --app-dir scripts --port 8900   # terminal 3 — HQ API
 ```
 
 Control plane:
@@ -98,14 +98,52 @@ python3 scripts/control.py pause
 python3 scripts/control.py flatten FLATTEN
 ```
 
-### Telegram HQ
+### Telegram AI HQ
 
-Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. HQ is read-only and supports two things:
+A FastAPI service forwards every Telegram message to Claude (via the Upsonic agent framework),
+which answers by calling tools that read the desk's real state:
 
-- `status` — mode, NAV, positions, last decision, gate verdict
-- `why BTC?` — the sensor contributions behind that decision, in plain language
+| Tool | Answers |
+|---|---|
+| `get_desk_status()` | mode, NAV, session P&L, exposure, positions, last decision, gate verdict |
+| `get_symbol_decision(symbol)` | regime, conviction, every sensor's signed contribution, that symbol's P&L |
+| `get_recent_changes(minutes)` | regime flips, gate events and real orders in the window |
+| `request_flatten()` | stages a confirmation — **closes nothing** |
 
-HQ cannot place, size or authorize a trade. It reads `run/state.json` and speaks.
+```text
+You:  How am I doing?
+HQ:   NAV 29.9639 USDT / Session -0.0283 USDT (-0.09%) / Exposure 0.0000
+
+You:  Why is ETH losing?
+HQ:   ETH is down -0.06% unrealized. Trend +0.29 and smart money +0.09 are
+      holding the position; microstructure turned -0.01. Most of the loss is
+      0.0291 USDT of fees across 28 fills.
+
+You:  Flatten everything.
+HQ:   Flatten request staged. ETH-USDT 5.9442 USDT will be closed.
+      Reply with the exact word FLATTEN to confirm.
+
+You:  FLATTEN
+HQ:   Flatten sent to the runner.
+```
+
+Claude can inspect and operate the desk, but every financial action still passes through
+deterministic controls. `request_flatten` only writes a pending record; the literal `FLATTEN`
+token is matched **in the webhook handler before the model is invoked**, and the close itself is
+executed by `scripts/execute.py` through the same risk gate as any other order. The agent cannot
+buy, sell, size, or arm anything, and a wrong token never consumes the pending request.
+
+Setup:
+
+```bash
+pip install -r requirements.txt
+uvicorn api:app --host 127.0.0.1 --port 8900 --app-dir scripts
+ngrok http 8900
+python3 scripts/set_webhook.py https://<your>.ngrok-free.app
+```
+
+`.env` needs `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET` and
+`ANTHROPIC_API_KEY`. Messages from any other chat id are dropped.
 
 ## Safety
 
