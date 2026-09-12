@@ -11,7 +11,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from journal import append_event, merge_state, utc_now
+from datetime import datetime, timedelta, timezone
+
+from journal import append_event, load_state, merge_state, utc_now
 from perception import number
 from risk_gate import evaluate as evaluate_risk
 
@@ -109,3 +111,45 @@ def execute(client, state: dict[str, Any]) -> dict[str, Any]:
                   "avg_price": execution["average_price"], "sz": arguments.get("sz")}, run_id)
     merge_state({"cycle": {"gate": gate, "execution": execution}})
     return execution
+
+
+def flatten(client, state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Sell every desk-owned position, one symbol at a time, through the gate.
+
+    The watchdog decides that a flatten is required; this turns that decision
+    into orders. It is deterministic on purpose — no model is consulted, and
+    the gate still clamps each sell to the inventory the desk actually owns.
+    """
+    from watchdog import evaluate as evaluate_watchdog
+
+    state = state or load_state()
+    actions = [item for item in evaluate_watchdog(state).get("actions", [])
+               if item.get("action") == "FLATTEN_AGENT_INVENTORY"]
+    results = []
+    for action in actions:
+        symbol = action.get("symbol")
+        position = next((p for p in state.get("account", {}).get("positions", [])
+                         if p.get("symbol") == symbol), {})
+        exposure = number(position.get("exposure_usdt"))
+        price = exposure / number(action.get("base_amount")) if number(action.get("base_amount")) else 0.0
+        if exposure <= 0:
+            continue
+        run_id = f"flatten-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{symbol.split('-')[0].lower()}"
+        proposal = {
+            "run_id": run_id, "symbol": symbol, "price": price, "action": "FLATTEN",
+            "requested_notional_usdt": exposure, "confidence": 1.0, "smart_money_veto": False,
+            "market_observed_at": utc_now(), "market_age_seconds": 0,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat(),
+            "rationale_tr": "Kullanıcı flatten onayı; desk envanteri kapatılıyor.",
+            "mcp_call": build_call({"run_id": run_id, "symbol": symbol, "action": "REDUCE"}),
+        }
+        merge_state({"cycle": {"run_id": run_id, "proposal": proposal,
+                               "execution": {"run_id": run_id, "status": "NOT_SENT", "tool": None,
+                                             "client_order_id": None, "order_id": None}}})
+        execution = execute(client, load_state())
+        results.append({"symbol": symbol, "exposure_usdt": exposure, **execution})
+        state = load_state()
+    if results:
+        append_event("MCP_WRITE", "WARN", "Flatten emirleri gönderildi",
+                     {"count": len(results), "symbols": [r["symbol"] for r in results]})
+    return results

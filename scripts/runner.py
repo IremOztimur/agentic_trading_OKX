@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import perception
 from atk import ATKClient, ATKError
-from execute import build_call, execute
+from execute import build_call, execute, flatten
 from journal import append_event, load_state, merge_state, utc_now
 from perception import number
 from regime import UNIVERSE, classify_state
@@ -219,6 +219,10 @@ class Runner:
         })
         if watchdog["actions"]:
             append_event("WATCHDOG", "WARN", watchdog["reason"] or "Risk azaltma gerekli", {"actions": watchdog["actions"]})
+            # The watchdog decides; the runner executes. Nothing here waits on a model.
+            if any(item.get("action") == "FLATTEN_AGENT_INVENTORY" for item in watchdog["actions"]):
+                self.arm_live(True)
+                flatten(self.client, load_state())
         if state.get("session", {}).get("mode") != "LIVE" and self.live_armed:
             self.arm_live(False)
 
