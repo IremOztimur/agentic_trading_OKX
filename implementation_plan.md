@@ -47,6 +47,7 @@ Kabul: RANGE, TREND, SHOCK replay fixture'ları ve stale-provider testleri geçe
 - [x] Claude'un symbol, action ve notional değiştirmesine izin verme.
 - [x] Timeout/bozuk JSON durumunda HOLD üret.
 - [x] SHOCK aksiyonunda Claude'u bekleme.
+- [x] Claude subprocess çalışırken heartbeat ve public market taramasını non-blocking sürdür.
 
 Kabul: normal HOLD turunda sıfır agent çağrısı; aday turunda tam bir çağrı; geçersiz yanıtta sıfır write.
 

@@ -49,7 +49,7 @@
 - Runner bu istekte Claude'u yalnızca bağlı custom MCP read araçlarıyla çağırıyor ve account freshness'i state'e yansıtıyor.
 - Smart Money verisi yokken gösterilen `VETO`, dashboard'da `BEKLENİYOR`; teknik aday yokken `NOT CHECKED` olarak ayrıştırıldı.
 - Her yeni proposal gate/run kimliği ve expiry alanlarını sıfırlıyor; eski gate zamanı yeni kararla karışmıyor.
-- Gerçek private preflight, çalışan runner yeni kodla yeniden başlatıldıktan sonra doğrulanacak.
+- Runner-owned gerçek private preflight tamamlandı: 30 USDT, yaklaşık 29.9925 USD NAV, sıfır açık emir ve grid state'e yansıtıldı.
 
 ## Headless Claude/MCP teşhisi
 
@@ -58,4 +58,6 @@
 - Runner varsayılan Claude komutuna explicit read-only allowlist ve fenced-JSON parser eklendi; stdout/stderr hata ayrıntıları audit'e ekleniyor.
 - 1m ATR ile 5m return doğrudan karşılaştırılmasından doğan yanlış SHOCK, `sqrt(5)` zaman ölçeğiyle düzeltildi.
 - DRY_RUN ve sıfır pozisyonda SHOCK artık Claude emergency çağrısı üretmiyor.
+- Custom MCP üzerinde spot place/get/cancel ve instrument tool adları ile input şemaları write çağrısı yapılmadan keşfedildi.
+- Claude görevi artık non-blocking alt süreçtir; agent çalışırken heartbeat, public market ve watchdog devam eder.
 - 39 unit/contract/replay testi geçiyor.

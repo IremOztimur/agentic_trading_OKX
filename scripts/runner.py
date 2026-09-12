@@ -67,6 +67,9 @@ class Runner:
         self.agent_command = agent_command or os.environ.get("REGIME_DESK_AGENT_COMMAND", DEFAULT_AGENT_COMMAND)
         self.last_fast = self.last_regime = self.last_oi = 0.0
         self.last_agent_event: str | None = None
+        self.background_agents = False
+        self.agent_process: subprocess.Popen | None = None
+        self.agent_meta: tuple[str, str | None, float] | None = None
 
     def public_read(self, label: str, call, *args):
         started = time.monotonic()
@@ -144,8 +147,13 @@ class Runner:
         started = time.monotonic()
         completed = subprocess.run(shlex.split(self.agent_command) + [prompt], text=True, capture_output=True, timeout=AGENT_TIMEOUT_SECONDS, check=False)
         self.last_agent_event = event_key
+        return self.handle_agent_completion(event, run_id, completed, started)
+
+    def handle_agent_completion(self, event: str, run_id: str | None, completed: subprocess.CompletedProcess, started: float) -> bool:
         if completed.returncode:
             append_event("SYSTEM", "ERROR", "Claude custom MCP görevi başarısız; fail-closed", {"event": event, "run_id": run_id, "error": (completed.stderr or completed.stdout)[:500]}, run_id)
+            if event == "preflight":
+                merge_state({"session": {"health": {"mcp": "ERROR", "account": "STALE", "trade_ready": False}}})
             return False
         try:
             result = parse_agent_output(completed.stdout)
@@ -155,6 +163,49 @@ class Runner:
             return False
         append_event("SYSTEM", "INFO", "Claude custom MCP görevi tamamlandı", {"event": event, "run_id": run_id, "latency_ms": round((time.monotonic() - started) * 1000)}, run_id)
         return True
+
+    def request_agent(self, event: str, run_id: str | None = None) -> bool:
+        if not self.background_agents:
+            return self.trigger_agent(event, run_id)
+        if self.agent_process and self.agent_process.poll() is None:
+            append_event("SYSTEM", "WARN", "Claude görevi zaten çalışıyor; yeni istek fail-closed atlandı", {"event": event, "run_id": run_id}, run_id)
+            return False
+        event_key = f"{event}:{run_id or ''}"
+        if event != "preflight" and event_key == self.last_agent_event:
+            return False
+        prompt = f"/desk {event} {run_id or ''}".strip()
+        started = time.monotonic()
+        self.agent_process = subprocess.Popen(shlex.split(self.agent_command) + [prompt], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.agent_meta = (event, run_id, started)
+        self.last_agent_event = event_key
+        append_event("SYSTEM", "INFO", "Claude custom MCP görevi arka planda başlatıldı", {"event": event, "run_id": run_id}, run_id)
+        return True
+
+    def poll_agent(self) -> None:
+        if not self.agent_process or not self.agent_meta:
+            return
+        event, run_id, started = self.agent_meta
+        if self.agent_process.poll() is None:
+            if time.monotonic() - started <= AGENT_TIMEOUT_SECONDS:
+                return
+            self.agent_process.kill()
+            stdout, stderr = self.agent_process.communicate()
+            append_event("SYSTEM", "ERROR", "Claude custom MCP görevi timeout; fail-closed", {"event": event, "run_id": run_id, "stdout": stdout[:300], "stderr": stderr[:300]}, run_id)
+            self.agent_process = self.agent_meta = None
+            return
+        stdout, stderr = self.agent_process.communicate()
+        completed = subprocess.CompletedProcess([], self.agent_process.returncode, stdout, stderr)
+        self.agent_process = self.agent_meta = None
+        self.handle_agent_completion(event, run_id, completed, started)
+
+    def close(self) -> None:
+        if self.agent_process and self.agent_process.poll() is None:
+            self.agent_process.terminate()
+            try:
+                self.agent_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.agent_process.kill()
+                self.agent_process.wait(timeout=5)
 
     def apply_private_account(self, result: dict) -> None:
         account = result.get("account") or {}
@@ -218,9 +269,9 @@ class Runner:
         self.refresh_features()
         proposal = self.classify()
         if proposal and proposal.get("candidate_action") in ENTRY_ACTIONS:
-            self.trigger_agent("candidate", proposal["run_id"])
+            self.request_agent("candidate", proposal["run_id"])
         elif proposal and proposal.get("regime") == "SHOCK" and load_state().get("session", {}).get("mode") == "LIVE":
-            self.trigger_agent("emergency", proposal["run_id"])
+            self.request_agent("emergency", proposal["run_id"])
 
     def heartbeat(self) -> None:
         state = load_state()
@@ -235,15 +286,16 @@ class Runner:
         merge_state({"session": {"mode": watchdog["mode"], "heartbeat_at": utc_now(), "health": {"mcp": mcp_health, "account": account_health, "market": market_health, "watchdog": "READY", "trade_ready": trade_ready}}, "account": {"account_age_seconds": round(account_age, 3) if account_age is not None else None}, "watchdog": {"status": watchdog["status"], "last_check_at": watchdog["checked_at"], "last_action": watchdog["reason"]}})
         if watchdog["actions"]:
             append_event("WATCHDOG", "WARN", watchdog["reason"] or "Emergency gerekli", {"actions": watchdog["actions"]})
-            self.trigger_agent("emergency", watchdog["reason"])
+            self.request_agent("emergency", watchdog["reason"])
         if state.get("session", {}).get("flatten_requested"):
-            self.trigger_agent("emergency", "USER_FLATTEN")
+            self.request_agent("emergency", "USER_FLATTEN")
         if state.get("session", {}).get("private_preflight_requested"):
-            success = self.trigger_agent("preflight")
-            patch = {"session": {"private_preflight_requested": False}}
-            if not success:
-                patch["session"]["health"] = {"mcp": "ERROR", "account": "STALE", "trade_ready": False}
-            merge_state(patch)
+            if not self.agent_process or self.agent_process.poll() is not None:
+                success = self.request_agent("preflight")
+                patch = {"session": {"private_preflight_requested": False}}
+                if not success:
+                    patch["session"]["health"] = {"mcp": "ERROR", "account": "STALE", "trade_ready": False}
+                merge_state(patch)
 
     @staticmethod
     def age(value: str | None, now: datetime) -> float | None:
@@ -274,6 +326,7 @@ class Runner:
             self.trigger_agent("candidate", proposal["run_id"])
 
     def run(self) -> None:
+        self.background_agents = True
         self.preflight()
         started = time.monotonic()
         self.last_fast = self.last_regime = self.last_oi = started
@@ -281,12 +334,13 @@ class Runner:
         while True:
             now = time.monotonic()
             try:
+                self.poll_agent()
                 self.heartbeat()
                 if now - self.last_fast >= FAST_MARKET_SECONDS:
                     self.refresh_fast_market()
                     shock = self.classify(shock_only=True)
                     if shock and load_state().get("session", {}).get("mode") == "LIVE":
-                        self.trigger_agent("emergency", shock["run_id"])
+                        self.request_agent("emergency", shock["run_id"])
                     self.last_fast = now
                 if now - self.last_oi >= OI_SECONDS:
                     self.refresh_oi(); self.last_oi = now
@@ -311,13 +365,16 @@ def main() -> int:
         print("ERROR: başka bir Regime Desk runner zaten çalışıyor")
         return 1
     try:
-        getattr(Runner(), args.command)()
+        runner = Runner()
+        getattr(runner, args.command)()
     except (PublicMarketError, OSError) as exc:
         merge_state({"session": {"health": {"market": "ERROR", "trade_ready": False}}})
         append_event("SYSTEM", "ERROR", "Public runner başlatılamadı", {"error": str(exc)[:500]})
         print(f"ERROR: {exc}")
         return 1
     finally:
+        if "runner" in locals():
+            runner.close()
         lock_handle.close()
     return 0
 

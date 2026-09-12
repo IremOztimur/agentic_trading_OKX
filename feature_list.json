@@ -11,7 +11,7 @@
     {"id": "rate-limit-policy", "description": "Endpoint pacing, read 429 backoff ve no-blind-write-retry testlidir", "passes": true},
     {"id": "event-driven-agent", "description": "Claude yalnızca actionable candidate için APPROVE/VETO verir", "passes": true},
     {"id": "public-runner-preflight", "description": "Minimal runner OKX public market preflight tamamlar", "passes": true},
-    {"id": "private-mcp-preflight", "description": "Runner isteğiyle Claude custom MCP account/open-order read tamamlar", "passes": false},
+    {"id": "private-mcp-preflight", "description": "Runner isteğiyle Claude custom MCP account/open-order read tamamlar", "passes": true},
     {"id": "dry-run-soak", "description": "Runner en az 30 dakika hatasız DRY_RUN çalışır", "passes": false},
     {"id": "mcp-live-smoke", "description": "CANLI_TEST onaylı minimum write smoke testi tamamlanır", "passes": false}
   ]

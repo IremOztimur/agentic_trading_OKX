@@ -1,7 +1,7 @@
 import unittest
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +49,15 @@ class RunnerTests(unittest.TestCase):
         subject = TestRunner()
         with self.assertRaises(ValueError):
             subject.apply_private_account({"account": {"nav": 0, "available_usdt": 0}})
+
+    def test_background_agent_request_does_not_block(self):
+        subject = TestRunner()
+        subject.background_agents = True
+        process = Mock()
+        process.poll.return_value = None
+        with patch("runner.subprocess.Popen", return_value=process), patch("runner.append_event"):
+            self.assertTrue(subject.request_agent("preflight"))
+        self.assertIs(subject.agent_process, process)
 
 
 if __name__ == "__main__":
