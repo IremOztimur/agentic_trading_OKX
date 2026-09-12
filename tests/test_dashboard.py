@@ -19,6 +19,15 @@ class DashboardTests(unittest.TestCase):
         for pattern in ("linear-gradient", "radial-gradient", "backdrop-filter", "font-family:inter", "glassmorphism"):
             self.assertNotIn(pattern, source)
 
+    def test_execution_mode_is_prominent_and_explains_order_flow(self):
+        html = (ROOT / "static/index.html").read_text()
+        script = (ROOT / "static/app.js").read_text()
+        self.assertIn('id="modeHero"', html)
+        self.assertIn('id="orderFlow"', html)
+        self.assertIn("Hiçbir emir OKX’e gönderilmez.", script)
+        self.assertIn("Gerçek emir akışı açık.", script)
+        self.assertNotIn("Karar, risk ve execution aynı yerde.", html)
+
     def test_dashboard_projection_has_valid_contract(self):
         state = json.loads((ROOT / "static/data/dashboard.json").read_text())
         self.assertEqual(state["schema_version"], 1)

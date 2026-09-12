@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 from datetime import datetime, timezone
 
 from journal import append_event, load_state, merge_state
+from session_policy import live_override_date
 
 
 def age(value: str | None) -> float:
@@ -38,15 +40,23 @@ def main() -> int:
             raise SystemExit("LIVE reddedildi: preflight hazır değil")
         if age(state["session"].get("heartbeat_at")) > 30:
             raise SystemExit("LIVE reddedildi: runner heartbeat stale")
-        patch, message = {"session": {"mode": "LIVE"}}, "LIVE modu kullanıcı onayıyla açıldı"
+        override_date = live_override_date()
+        patch = {"session": {"mode": "LIVE", "safe_close_override_date": override_date}}
+        message = ("LIVE modu kullanıcı onayıyla açıldı; bugünkü safe-close açıkça override edildi"
+                   if override_date else "LIVE modu kullanıcı onayıyla açıldı")
     elif args.command == "pause":
         patch, message = {"session": {"mode": "PAUSED"}}, "Desk kullanıcı tarafından PAUSED yapıldı"
     elif args.command == "resume":
-        patch, message = {"session": {"mode": "DRY_RUN"}}, "Desk DRY_RUN modunda devam ediyor"
+        patch = {"session": {"mode": "DRY_RUN", "flatten_requested": False,
+                             "flatten_request_id": None, "safe_close_override_date": None}}
+        message = "Desk DRY_RUN modunda devam ediyor"
     else:
         if args.confirmation != "FLATTEN":
             raise SystemExit("Flatten için tam olarak FLATTEN yazılmalı")
-        patch, message = {"session": {"mode": "HALTED", "flatten_requested": True}}, "Emergency flatten runner kuyruğuna alındı"
+        request_id = f"fl{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}{secrets.token_hex(3)}"
+        patch = {"session": {"mode": "HALTED", "flatten_requested": True,
+                             "flatten_request_id": request_id}}
+        message = "Emergency flatten runner kuyruğuna alındı"
     merge_state(patch)
     append_event("SYSTEM", "WARN" if args.command in {"pause", "flatten"} else "INFO", message)
     print(message)

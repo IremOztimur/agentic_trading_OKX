@@ -7,14 +7,22 @@
   <title>Regime Desk</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-mode="LOADING">
   <a class="skip-link" href="#main">Ana içeriğe geç</a>
   <header class="masthead"><div class="masthead-inner">
-    <div><p class="product-mark">REGIME DESK / OKX SPOT</p><p class="product-note">Agent decision monitor</p></div>
-    <div class="mode-block" aria-live="polite"><span>SESSION MODE</span><strong id="mode">—</strong></div>
+    <div><p class="product-mark">REGIME DESK <span>/ OKX SPOT</span></p><p class="product-note">Deterministic execution · AI control plane</p></div>
+    <div class="mode-block" aria-live="polite"><span class="mode-dot" aria-hidden="true"></span><div><span>DESK MODE</span><strong id="mode">—</strong></div></div>
   </div></header>
   <main id="main" class="shell">
-    <section class="intro"><div><p class="eyebrow">CURRENT DESK STATE</p><h1>Karar, risk ve execution aynı yerde.</h1></div><p id="summary" class="lead">State verisi bekleniyor.</p></section>
+    <section class="intro">
+      <div class="intro-copy"><p class="eyebrow">AUTONOMOUS SPOT DESK</p><h1>Rejimi okur.<br>Riski sınırlar.<br>Kararı açıklar.</h1><p id="summary" class="lead">State verisi bekleniyor.</p></div>
+      <aside id="modePanel" class="mode-panel" aria-live="polite" aria-label="Desk çalışma modu">
+        <div class="mode-panel-head"><p>EXECUTION STATE</p><span id="modePulse" class="mode-pulse" aria-hidden="true"></span></div>
+        <strong id="modeHero">BAĞLANIYOR</strong>
+        <p id="modeMessage" class="mode-message">Desk durumu okunuyor.</p>
+        <dl class="mode-facts"><div><dt>Emir akışı</dt><dd id="orderFlow">—</dd></div><div><dt>Kontrol</dt><dd>Telegram HQ</dd></div></dl>
+      </aside>
+    </section>
     <section id="healthNotice" class="notice" aria-live="polite">Gerçek hesap ve market preflight tamamlanmadı. LIVE kapalı.</section>
     <section class="status-strip" aria-label="Sistem durumu">
       <div><span>MCP</span><strong id="mcpHealth">—</strong></div><div><span>ACCOUNT</span><strong id="accountHealth">—</strong></div><div><span>MARKET</span><strong id="marketHealth">—</strong></div><div><span>WATCHDOG</span><strong id="watchdogHealth">—</strong></div><div><span>HEARTBEAT</span><strong id="heartbeat">—</strong></div>

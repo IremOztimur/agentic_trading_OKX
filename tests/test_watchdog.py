@@ -41,7 +41,20 @@ class WatchdogTests(unittest.TestCase):
         result = watchdog.evaluate(state, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
         self.assertEqual(result["actions"], [])
 
+    def test_explicit_same_day_rearm_overrides_safe_close(self):
+        state = fixture()
+        state["session"]["safe_close_override_date"] = "2026-01-01"
+        now = datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)
+        result = watchdog.evaluate(state, now)
+        self.assertEqual(result["mode"], "LIVE")
+        self.assertEqual(result["actions"], [])
+
+    def test_safe_close_override_expires_the_next_day(self):
+        state = fixture()
+        state["session"]["safe_close_override_date"] = "2025-12-31"
+        now = datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)
+        self.assertEqual(watchdog.evaluate(state, now)["reason"], "SAFE_CLOSE")
+
 
 if __name__ == "__main__":
     unittest.main()
-

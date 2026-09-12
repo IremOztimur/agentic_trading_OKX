@@ -157,13 +157,18 @@ The webhook registers itself on startup from `HQ_PUBLIC_URL`. `.env` also needs
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET` and `ANTHROPIC_API_KEY`.
 Messages from any other user id are dropped.
 
+`/live`, `go live`, `let's go live`, `canli` and `canlı` bypass model latency and return a
+signed Confirm/Cancel keyboard directly. The confirmation expires after five minutes, survives
+an API restart, and still executes through `control.py live CANLI`.
+
 ## Safety
 
 Spot only; no swap, futures, options, earn, transfer, withdraw or leverage writes. Risk per trade
 0.35% NAV, coin cap 25%, total cap 50%, soft drawdown −3%, hard halt −5%, safe close 19:20
 Europe/Istanbul. Live orders are additionally capped at `min(10 USDT, NAV × 5%)` in
 `scripts/execute.py`. The client order id is the run id, and an order is never resent without
-looking that id up first.
+looking that id up first. An explicit `CANLI` re-arm after 19:20 overrides safe close only for
+that Istanbul calendar day; the override expires automatically the next day.
 
 ## Fork it
 

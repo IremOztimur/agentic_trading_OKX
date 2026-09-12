@@ -63,7 +63,7 @@ Runner ve Python kuralları şunların tek sahibidir:
 - Withdraw, transfer, earn ve leverage write yasaktır.
 - İşlem başına planlanan kayıp en fazla `%0.35 NAV`.
 - Coin exposure en fazla `%25 NAV`; toplam exposure en fazla `%50 NAV`.
-- Günlük `-%3` drawdown yeni riski durdurur; `-%5` ve 19:20 Europe/Istanbul HALT üretir.
+- Günlük `-%3` drawdown yeni riski durdurur; `-%5` ve 19:20 Europe/Istanbul HALT üretir. Operatör 19:20 sonrasında `CANLI` ile açıkça yeniden arm ederse safe-close override yalnızca o İstanbul takvim günü için geçerlidir.
 - LIVE emirleri ayrıca `min(10 USDT, NAV × %5)` ile sınırlıdır.
 - Belirsiz write sonucu aynı `client order ID` sorgulanmadan tekrarlanmaz.
 - Sensor quorum `%60` altına düşerse yeni pozisyon açılmaz.

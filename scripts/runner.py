@@ -20,7 +20,7 @@ from journal import append_event, load_state, merge_state, utc_now
 from perception import number
 from regime import UNIVERSE, classify_state
 from risk_gate import evaluate as evaluate_risk
-from watchdog import evaluate as evaluate_watchdog
+from watchdog import agent_inventory, evaluate as evaluate_watchdog
 
 SYMBOLS = UNIVERSE
 LOOP_SECONDS = 5
@@ -223,6 +223,10 @@ class Runner:
             if any(item.get("action") == "FLATTEN_AGENT_INVENTORY" for item in watchdog["actions"]):
                 self.arm_live(True)
                 flatten(self.client, load_state())
+                self.refresh_account()
+            if watchdog.get("reason") == "USER_FLATTEN" and not agent_inventory(load_state()):
+                merge_state({"session": {"flatten_requested": False, "flatten_request_id": None}})
+                append_event("WATCHDOG", "INFO", "Kullanıcı flatten talebi tamamlandı", {})
         if state.get("session", {}).get("mode") != "LIVE" and self.live_armed:
             self.arm_live(False)
 

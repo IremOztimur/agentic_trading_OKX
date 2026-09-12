@@ -35,7 +35,7 @@ def build_call(proposal: dict[str, Any]) -> dict[str, Any] | None:
     """Semantic action → ATK MCP tool call. Size is a placeholder; the gate sets it."""
     symbol = proposal.get("symbol")
     action = proposal.get("action")
-    if not symbol or action not in {"BUY", "REDUCE"}:
+    if not symbol or action not in {"BUY", "REDUCE", "FLATTEN"}:
         return None
     common = {"instId": symbol, "tdMode": "cash", "ordType": "market",
               "clOrdId": client_order_id(proposal.get("run_id", ""))}
@@ -85,8 +85,10 @@ def execute(client, state: dict[str, Any]) -> dict[str, Any]:
     if existing:
         append_event("MCP_WRITE", "WARN", "Aynı client order ID zaten mevcut; tekrar gönderilmedi",
                      {"client_order_id": clord_id, "order_id": existing.get("ordId")}, run_id)
-        return {"run_id": run_id, "status": existing.get("state", "SUBMITTED").upper(), "tool": approved["tool"],
-                "client_order_id": clord_id, "order_id": existing.get("ordId")}
+        execution = {"run_id": run_id, "status": existing.get("state", "SUBMITTED").upper(), "tool": approved["tool"],
+                     "client_order_id": clord_id, "order_id": existing.get("ordId")}
+        merge_state({"cycle": {"gate": gate, "execution": execution}})
+        return execution
 
     append_event("MCP_WRITE", "WARN", "OKX spot emri gönderiliyor",
                  {"tool": approved["tool"], "arguments": arguments}, run_id)
@@ -134,7 +136,8 @@ def flatten(client, state: dict[str, Any] | None = None) -> list[dict[str, Any]]
         price = exposure / number(action.get("base_amount")) if number(action.get("base_amount")) else 0.0
         if exposure <= 0:
             continue
-        run_id = f"flatten-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{symbol.split('-')[0].lower()}"
+        request_id = state.get("session", {}).get("flatten_request_id") or f"fllegacy{state.get('session', {}).get('id', 'session')}"
+        run_id = f"{request_id}-{symbol.split('-')[0].lower()}"
         proposal = {
             "run_id": run_id, "symbol": symbol, "price": price, "action": "FLATTEN",
             "requested_notional_usdt": exposure, "confidence": 1.0, "smart_money_veto": False,
@@ -149,7 +152,12 @@ def flatten(client, state: dict[str, Any] | None = None) -> list[dict[str, Any]]
         execution = execute(client, load_state())
         results.append({"symbol": symbol, "exposure_usdt": exposure, **execution})
         state = load_state()
-    if results:
-        append_event("MCP_WRITE", "WARN", "Flatten emirleri gönderildi",
-                     {"count": len(results), "symbols": [r["symbol"] for r in results]})
+    sent = [result for result in results if result.get("status") != "NOT_SENT"]
+    if sent:
+        append_event("MCP_WRITE", "WARN", "Flatten emirleri işlendi",
+                     {"count": len(sent), "symbols": [result["symbol"] for result in sent],
+                      "statuses": [result["status"] for result in sent]})
+    elif results:
+        append_event("MCP_WRITE", "ERROR", "Flatten emri gönderilemedi",
+                     {"symbols": [result["symbol"] for result in results]})
     return results

@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from journal import append_event, load_state, merge_state
+from session_policy import safe_close_active
 
 
 RISK_PER_TRADE = 0.0035
@@ -109,11 +109,9 @@ def evaluate(state: dict[str, Any], now: datetime | None = None) -> dict[str, An
     reducing = action in REDUCE_ACTIONS
     market_age = freshness_age(proposal.get("market_age_seconds"), proposal.get("market_observed_at"), now)
     account_age = freshness_age(account.get("account_age_seconds"), account.get("account_observed_at"), now)
-    safe_close = now.astimezone(ZoneInfo("Europe/Istanbul"))
-
     if drawdown <= HARD_DRAWDOWN:
         verdict, reasons = "HALT", ["HARD_DRAWDOWN"]
-    elif (safe_close.hour, safe_close.minute) >= (19, 20) and not reducing:
+    elif safe_close_active(session, now) and not reducing:
         verdict, reasons = "HALT", ["SAFE_CLOSE"]
     elif session.get("mode") not in {"DRY_RUN", "LIVE"} and not reducing:
         verdict, reasons = "HOLD", ["MODE_BLOCKED"]
@@ -211,7 +209,7 @@ def deny(reason: str) -> dict[str, Any]:
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": f"Regime Desk: {reason}"}}
 
 
-def hook(payload: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | None:
+def hook(payload: dict[str, Any], state: dict[str, Any], now: datetime | None = None) -> dict[str, Any] | None:
     tool = str(payload.get("tool_name") or "")
     if not WRITE_WORD.search(tool):
         return None
@@ -219,7 +217,7 @@ def hook(payload: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | Non
         return deny("yasak OKX write kategorisi")
     if state.get("session", {}).get("mode") != "LIVE":
         return deny("MCP write için mode LIVE olmalı")
-    fresh_gate = evaluate(state)
+    fresh_gate = evaluate(state, now)
     if fresh_gate["verdict"] != "ALLOW":
         return deny(", ".join(fresh_gate["reason_codes"]))
     approved = fresh_gate.get("approved_call") or {}

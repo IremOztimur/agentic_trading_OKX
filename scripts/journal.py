@@ -41,6 +41,8 @@ def default_state() -> dict[str, Any]:
             "starting_nav": None,
             "starting_inventory": {},
             "flatten_requested": False,
+            "flatten_request_id": None,
+            "safe_close_override_date": None,
             "private_preflight_requested": False,
             "health": {"mcp": "UNKNOWN", "account": "UNKNOWN", "market": "UNKNOWN", "watchdog": "UNKNOWN", "trade_ready": False},
         },

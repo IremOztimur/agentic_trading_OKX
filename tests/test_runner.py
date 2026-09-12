@@ -125,6 +125,11 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(call["arguments"]["side"], "sell")
         self.assertEqual(call["arguments"]["tgtCcy"], "base_ccy")
 
+    def test_flatten_sells_base_currency(self):
+        call = execute.build_call(self.proposal("FLATTEN"))
+        self.assertEqual(call["arguments"]["side"], "sell")
+        self.assertEqual(call["arguments"]["tgtCcy"], "base_ccy")
+
     def test_hold_builds_no_call(self):
         self.assertIsNone(execute.build_call(self.proposal("HOLD")))
 
