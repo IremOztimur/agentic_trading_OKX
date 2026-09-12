@@ -1,0 +1,7 @@
+# HQ control plane (the trading engine itself needs only the stdlib + okx-trade-mcp).
+# anthropic is pinned below 1.0: upsonic 0.77 passes an httpx client, and
+# anthropic >=1.0 switched to httpx2 and rejects it.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+upsonic==0.77.3
+anthropic==0.125.0
