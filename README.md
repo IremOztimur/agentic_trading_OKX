@@ -3,18 +3,17 @@
 Regime Desk, OKX Agentic Trading Hackathon için açıklanabilir ve risk-gated bir spot trading ajanıdır. `scripts/runner.py` gerçek loop'un sahibidir; `scripts/regime.py` piyasayı `RANGE`, `TREND` veya `SHOCK` olarak sınıflandırır. Claude yalnızca actionable RANGE/TREND adayında APPROVE/VETO checkpoint'i olarak çağrılır.
 
 ```text
-runner → OKX custom MCP → features → regime.py
+runner → OKX public market API → features → regime.py
                                   ├─ HOLD → log
                                   ├─ SHOCK → deterministic risk reduction
-                                  └─ candidate → Claude APPROVE/VETO → risk_gate.py → write
+                                  └─ candidate → Claude + existing custom MCP → risk_gate.py
 ```
 
 ## Çalıştırma
 
-Terminal 1, ilk OAuth ve otomasyon:
+Terminal 1, otomasyon:
 
 ```bash
-python3 scripts/runner.py authorize
 python3 scripts/runner.py preflight
 python3 scripts/runner.py run
 ```
@@ -27,7 +26,7 @@ Terminal 2, dashboard:
 
 Dashboard: [http://127.0.0.1:8765](http://127.0.0.1:8765)
 
-`/loop /desk` kullanılmaz. `/desk inspect` yalnızca salt-okunur manuel incelemedir.
+`/loop /desk` kullanılmaz. Runner normal turlarda OKX public endpoint'lerini kullanır. `/desk candidate` yalnızca teknik aday oluştuğunda mevcut Claude custom MCP bağlantısını kullanır; ikinci OAuth veya API credential yoktur.
 
 Kontrol komutları:
 
@@ -49,7 +48,9 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 Canlı write testi otomatik pakette değildir. `tests/live_smoke.md` açık `CANLI_TEST` onayı ister ve `min(10 USDT, NAV × %0.1)` sınırını aşmaz.
 
-Sabit limitler: işlem riski `%0.35 NAV`, coin `%25`, toplam `%50`, soft drawdown `−%3`, hard halt `−%5`, safe close `19:20 Europe/Istanbul`. Read 429 çağrıları Retry-After veya `1s/2s/4s` ile yeniden denenir; write sonucu belirsizse kör retry yapılmaz.
+Sabit limitler: işlem riski `%0.35 NAV`, coin `%25`, toplam `%50`, soft drawdown `−%3`, hard halt `−%5`, safe close `19:20 Europe/Istanbul`. Public read 429 çağrıları Retry-After veya `1s/2s/4s` ile yeniden denenir.
+
+LIVE executor henüz etkin değildir. Custom MCP write araçları yalnızca exact tool şemaları doğrulandıktan ve kullanıcı `CANLI_TEST` onayı verdikten sonra açılır.
 
 Mimari niyet: [`intent.md`](intent.md). Uygulama ve kabul planı: [`implementation_plan.md`](implementation_plan.md).
 

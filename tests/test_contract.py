@@ -47,7 +47,17 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             journal.save_state(state)
 
+    def test_non_finite_numbers_are_rejected(self):
+        state = journal.default_state()
+        state["account"]["account_age_seconds"] = float("inf")
+        with self.assertRaises(ValueError):
+            journal.save_state(state)
+
+    def test_legacy_non_finite_number_is_migrated_on_load(self):
+        journal.STATE_PATH.parent.mkdir(parents=True)
+        journal.STATE_PATH.write_text('{"account_age_seconds": Infinity}', encoding="utf-8")
+        self.assertIsNone(journal.load_state()["account_age_seconds"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

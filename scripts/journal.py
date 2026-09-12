@@ -7,6 +7,7 @@ import argparse
 import copy
 import fcntl
 import json
+import math
 import os
 import tempfile
 from contextlib import contextmanager
@@ -81,7 +82,7 @@ def _atomic_write(path: Path, payload: Any) -> None:
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            json.dump(payload, handle, ensure_ascii=False, indent=2, allow_nan=False)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -94,7 +95,18 @@ def _atomic_write(path: Path, payload: Any) -> None:
 def load_state() -> dict[str, Any]:
     if not STATE_PATH.exists():
         return default_state()
-    return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    return normalize_legacy_numbers(json.loads(STATE_PATH.read_text(encoding="utf-8")))
+
+
+def normalize_legacy_numbers(value: Any) -> Any:
+    """Convert non-standard numeric values left by older state writers to null."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: normalize_legacy_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_legacy_numbers(item) for item in value]
+    return value
 
 
 def validate_state(state: dict[str, Any]) -> None:
@@ -164,7 +176,7 @@ def main() -> int:
     merge = sub.add_parser("merge")
     merge.add_argument("file")
     event = sub.add_parser("event")
-    event.add_argument("--type", required=True, choices=("MCP_READ", "DECISION", "GATE", "MCP_WRITE", "WATCHDOG", "SYSTEM"))
+    event.add_argument("--type", required=True, choices=("MARKET_READ", "MCP_READ", "DECISION", "GATE", "MCP_WRITE", "WATCHDOG", "SYSTEM"))
     event.add_argument("--level", default="INFO", choices=("INFO", "WARN", "ERROR"))
     event.add_argument("--message", required=True)
     event.add_argument("--run-id")

@@ -60,29 +60,32 @@ def classify_symbol(item: dict[str, Any], previous: dict[str, Any] | None = None
     streak = int(previous.get("candidate_streak") or 0) + 1 if previous_candidate == candidate else 1
     regime = candidate if candidate == "SHOCK" or previous_regime is None or streak >= 2 else previous_regime
 
-    action = "HOLD"
+    technical_action = "HOLD"
     rationale = "Rejim görünür, fakat giriş koşulları birlikte doğrulanmadı."
     if candidate == "SHOCK":
-        action = "REDUCE" if exposure > 0 else "HOLD"
+        technical_action = "REDUCE" if exposure > 0 else "HOLD"
         rationale = "SHOCK önceliği etkin; yeni risk yok, açık agent inventory azaltılır."
     elif streak < 2:
         rationale = f"{candidate} adayı ilk kez görüldü; rejim değişimi için ikinci ardışık karar bekleniyor."
-    elif candidate == "RANGE" and range_ready and confidence >= CONFIDENCE_FLOOR and not veto:
-        action = "OPEN_GRID"
+    elif candidate == "RANGE" and range_ready and confidence >= CONFIDENCE_FLOOR:
+        technical_action = "OPEN_GRID"
         rationale = "Düşük ADX, dar EMA ayrışması ve VWAP geçişleri RANGE koşullarını doğruluyor."
-    elif candidate == "TREND" and trend_up and confidence >= CONFIDENCE_FLOOR and not veto:
-        action = "BUY_BREAKOUT"
+    elif candidate == "TREND" and trend_up and confidence >= CONFIDENCE_FLOOR:
+        technical_action = "BUY_BREAKOUT"
         rationale = "ADX, yukarı breakout, hacim ve order-flow aynı yönde TREND koşulunu doğruluyor."
     elif candidate == "TREND" and trend_down:
-        action = "REDUCE" if exposure > 0 else "HOLD"
+        technical_action = "REDUCE" if exposure > 0 else "HOLD"
         rationale = "Aşağı TREND tespit edildi; spot-only desk short açmaz."
-    elif veto:
-        rationale = "Price/volume adayı oluştu ancak Smart Money vetosu yeni riski engelledi."
     elif confidence < CONFIDENCE_FLOOR:
         rationale = "Rejim sınıflandırıldı ancak confidence eşiğin altında; HOLD."
 
+    action = technical_action
+    if technical_action in {"OPEN_GRID", "BUY_BREAKOUT"} and veto:
+        action = "HOLD"
+        rationale = "Teknik aday oluştu; güncel Smart Money bağlamı için agent checkpoint bekleniyor."
+
     result = dict(item)
-    result.update(regime=regime, candidate_regime=candidate, candidate_streak=streak, direction=direction, confidence=round(confidence, 4), last_action=action, rationale_tr=rationale)
+    result.update(regime=regime, candidate_regime=candidate, candidate_streak=streak, direction=direction, confidence=round(confidence, 4), technical_action=technical_action, last_action=action, rationale_tr=rationale)
     return result
 
 
@@ -92,24 +95,25 @@ def classify_state(state: dict[str, Any], now: datetime | None = None) -> tuple[
     incoming = state.get("observation_symbols") or state.get("symbols", [])
     symbols = [classify_symbol(item, previous.get(item.get("symbol"))) for item in incoming if item.get("symbol") in UNIVERSE]
 
-    grid_candidates = [item for item in symbols if item["last_action"] == "OPEN_GRID"]
+    grid_candidates = [item for item in symbols if item["technical_action"] == "OPEN_GRID"]
     if len(grid_candidates) > 1:
         winner = max(grid_candidates, key=lambda item: item["confidence"])["symbol"]
         for item in symbols:
-            if item["last_action"] == "OPEN_GRID" and item["symbol"] != winner:
+            if item["technical_action"] == "OPEN_GRID" and item["symbol"] != winner:
+                item["technical_action"] = "HOLD"
                 item["last_action"] = "HOLD"
                 item["rationale_tr"] = f"Tek-grid kuralında {winner} daha yüksek confidence aldığı için HOLD."
 
     priority = {"REDUCE": 3, "BUY_BREAKOUT": 2, "OPEN_GRID": 1, "HOLD": 0}
-    selected = max(symbols, key=lambda item: (4 if item.get("candidate_regime") == "SHOCK" else priority[item["last_action"]], item["confidence"]), default=None)
+    selected = max(symbols, key=lambda item: (4 if item.get("candidate_regime") == "SHOCK" else priority[item["technical_action"]], item["confidence"]), default=None)
     run_id = f"{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
     if not selected:
         proposal = {"run_id": run_id, "action": "HOLD", "requested_notional_usdt": 0, "rationale_tr": "Geçerli observation yok."}
     else:
         requested = 0.0
-        if selected["last_action"] in {"OPEN_GRID", "BUY_BREAKOUT"}:
+        if selected["technical_action"] in {"OPEN_GRID", "BUY_BREAKOUT"}:
             requested = number(state.get("account", {}).get("nav")) * 0.20
-        elif selected["last_action"] == "REDUCE":
+        elif selected["technical_action"] == "REDUCE":
             requested = number(selected.get("exposure_usdt")) * 0.50
         proposal = {
             "run_id": run_id,
@@ -119,6 +123,7 @@ def classify_state(state: dict[str, Any], now: datetime | None = None) -> tuple[
             "direction": selected["direction"],
             "confidence": selected["confidence"],
             "action": selected["last_action"],
+            "candidate_action": selected["technical_action"],
             "requested_notional_usdt": round(requested, 8),
             "stop_distance_pct": max(0.01, number(selected.get("features", {}).get("atr_pct")) * 1.5),
             "market_age_seconds": number(selected.get("market_age_seconds"), 9999),

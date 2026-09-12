@@ -60,6 +60,15 @@ class RiskGateTests(unittest.TestCase):
         state["symbols"][0]["features"]["instrument_state"] = "suspend"
         self.assertEqual(risk_gate.evaluate(state)["reason_codes"], ["INSTRUMENT_NOT_LIVE"])
 
+    def test_dry_run_can_size_semantic_candidate_without_write_tool(self):
+        state = fixture()
+        state["session"]["mode"] = "DRY_RUN"
+        state["cycle"]["proposal"].pop("mcp_call")
+        result = risk_gate.evaluate(state)
+        self.assertEqual(result["verdict"], "ALLOW")
+        self.assertEqual(result["reason_codes"], ["DRY_RUN_SEMANTIC_ALLOW"])
+        self.assertIsNone(result["approved_call"])
+
     def test_forbidden_tool_and_hook_argument_mismatch(self):
         state = fixture()
         state["cycle"]["proposal"]["mcp_call"]["tool"] = "mcp__claude_ai_okx-agent-trade-kit__swap_place_order"

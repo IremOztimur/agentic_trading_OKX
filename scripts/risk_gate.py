@@ -164,6 +164,12 @@ def evaluate(state: dict[str, Any], now: datetime | None = None) -> dict[str, An
     approved_call = None
     if verdict == "ALLOW":
         call = proposal.get("mcp_call") or {}
+        if session.get("mode") == "DRY_RUN" and not call:
+            return {
+                "run_id": run_id, "verdict": "ALLOW", "allowed_notional_usdt": round(allowed, 8),
+                "reason_codes": ["DRY_RUN_SEMANTIC_ALLOW"], "checked_at": now.isoformat(),
+                "expires_at": proposal.get("expires_at"), "approved_call": None,
+            }
         tool = str(call.get("tool") or "")
         arguments = dict(call.get("arguments") or {})
         if FORBIDDEN_WRITE.search(tool):

@@ -29,11 +29,16 @@
 
 - Mimari niyeti `intent.md`, kabul sırası `implementation_plan.md` içinde sabitlendi.
 - Claude `/loop` otomasyon yolundan çıkarıldı; `/desk` salt-okunur inspect/explain komutuna indirildi.
-- Tek-process `runner.py`, ayrı `control.py`, OAuth destekli `mcp_client.py` ve yerel feature motoru eklendi.
+- Tek-process `runner.py`, ayrı `control.py`, rate-limited `okx_public.py` ve yerel feature motoru eklendi.
 - 10s heartbeat, 15s hızlı market, 30s account, 2m regime ve 5m context cadence tanımlandı.
-- MCP endpoint pacing, read 429 backoff ve belirsiz write sonrası lookup/no-blind-retry eklendi.
-- Claude çıktısı APPROVE/VETO ile sınırlandı; tool, input ve notional sahipliği runner/gate katmanına taşındı.
+- Public endpoint pacing ve read 429 backoff eklendi.
+- Claude yalnızca candidate/emergency event'inde mevcut custom MCP read araçlarıyla çağrılacak şekilde sınırlandı.
 - Risk gate'e trade-ready, timestamp freshness, 19:20 safe-close ve agent-owned inventory sınırı eklendi.
 - 29 unit/contract/replay testi geçiyor.
-- Runner'ın ayrı OAuth oturumu, gerçek custom MCP preflight ve 30 dakikalık DRY_RUN soak henüz tamamlanmadı.
-- İlk runner OAuth denemesi sessiz transport nedeniyle kullanıcı yetkilendirmesi tamamlanmadan initialize timeout oldu; hiçbir MCP read/write yapılmadı. Terminalde URL gösteren üç dakikalık auth akışı hazırlandı.
+- Runner'ın ayrı OAuth yaklaşımı kaldırıldı; mevcut Claude custom MCP bağlantısı tek private bağlantı olarak kaldı.
+- Credential gerektirmeyen gerçek OKX public runner preflight tamamlandı; BTC/ETH/SOL instrument, ticker, book, trades, candles ve OI okundu.
+- Runtime `DRY_RUN`; public market ve watchdog `READY`; custom MCP `ON_DEMAND`. Account snapshot aday anına kadar bilinçli olarak `STALE`, dolayısıyla `trade_ready=false`.
+- Eski ikinci-OAuth denemesinden kalan `DISCONNECTED/MCP ERROR` state'i temizlendi; non-standard `Infinity` değeri `null` migrasyonuyla giderildi.
+- Smart Money custom MCP ile doğrulanana kadar veto artık kesin olarak `true`; yeni risk fail-closed.
+- 36 unit/contract/replay testi ve strict JSON doğrulaması geçiyor.
+- Event-triggered gerçek candidate çağrısı ve 30 dakikalık DRY_RUN soak henüz tamamlanmadı.
